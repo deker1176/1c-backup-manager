@@ -110,7 +110,7 @@ jobs:
           retention-days: 90
 
       - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release)
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release) || (github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[release]'))
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -118,7 +118,7 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
           MANUAL_TAG: ${{ inputs.version_tag }}
         run: |
-          $tag = if ($env:EVENT_NAME -eq 'workflow_dispatch') { $env:MANUAL_TAG } else { $env:REF_NAME }
+          $tag = if ($env:EVENT_NAME -eq 'workflow_dispatch') { $env:MANUAL_TAG } elseif ($env:REF_NAME -eq 'main') { 'v4.8.0' } else { $env:REF_NAME }
           if ($tag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw "Invalid release tag: $tag" }
           $notes = "1C Backup Manager $tag - Windows x64 build. Test restore before production use. SHA256SUMS included."
           gh release view $tag --json name *> $null
