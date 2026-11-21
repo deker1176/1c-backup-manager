@@ -1,0 +1,39 @@
+{
+  "server": "",
+  "ras_endpoint": "127.0.0.1:1545",
+  "cluster_agent": "",
+  "cluster_uuid": "",
+  "cluster_user": "",
+  "platform_bin": "",
+  "backup_root": "C:\\ProgramData\\1CBackupManager\\Backups",
+  "wait_seconds": 120,
+  "force_terminate": true,
+  "default_keep": 7,
+  "service_poll_seconds": 30,
+  "ftp": {
+    "host": "",
+    "port": 21,
+    "tls": true,
+    "user": "",
+    "path": "/backups"
+  },
+  "databases": [],
+  "ui_language": "ru",
+  "notifications": {
+    "smtp": {
+      "host": "",
+      "port": 587,
+      "security": "STARTTLS",
+      "user": "",
+      "from": "",
+      "to": ""
+    },
+    "telegram": {
+      "chat_id": ""
+    },
+    "max": {
+      "recipient_type": "chat_id",
+      "recipient_id": ""
+    }
+  }
+}

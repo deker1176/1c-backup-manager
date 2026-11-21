@@ -1,0 +1,42 @@
+# Never publish user configuration or Windows DPAPI secrets
+config.json
+secrets.dat
+scheduler_state.json
+*.dpapi
+
+# Backups / staged databases / archives
+*.dt
+*.bak
+*.bak.tmp
+*.7z
+*.zip
+*.rar
+*.sha256
+*.log
+Backups/
+backups/
+logs/
+data/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+ENV/
+
+# PyInstaller / Windows binaries
+build/
+dist/
+*.spec
+*.exe
+*.dll
+
+# Local development
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

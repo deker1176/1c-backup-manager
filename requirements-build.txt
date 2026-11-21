@@ -1,0 +1,7 @@
+# Install on Windows runner to build the standalone executable
+pyinstaller>=6.10,<7.0
+pywin32>=306
+pyodbc>=5.0
+py7zr>=0.22
+pystray>=0.19
+pillow>=10.0

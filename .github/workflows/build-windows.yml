@@ -1,0 +1,130 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: 'Publish Windows EXE to GitHub Releases'
+        required: true
+        type: boolean
+        default: false
+      version_tag:
+        description: 'Release tag (e.g. v4.8.0)'
+        required: true
+        type: string
+        default: 'v4.8.0'
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: Test source code
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies and virtual display
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb python3-tk
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-test.txt
+
+      - name: Run tests
+        run: |
+          xvfb-run -a python -m pytest -q test_v4.py test_v41.py test_v43.py test_v44.py test_v45.py test_v46.py test_v47.py test_v48.py
+
+  windows:
+    name: Package Windows EXE
+    runs-on: windows-latest
+    needs: test
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Windows build requirements
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-build.txt
+
+      - name: Build EXE
+        shell: pwsh
+        run: |
+          python -m PyInstaller `
+            --noconfirm `
+            --clean `
+            --onefile `
+            --windowed `
+            --name 1CBackupManager `
+            --hidden-import=win32timezone `
+            --hidden-import=backup_extensions `
+            --hidden-import=classic_gui `
+            --hidden-import=effector_gui `
+            --hidden-import=ui_locale `
+            --hidden-import=task_runtime `
+            --hidden-import=tray_support `
+            --hidden-import=single_instance `
+            --hidden-import=service_status `
+            --hidden-import=report_delivery `
+            --hidden-import=onec_tasks_8 `
+            --hidden-import=ibases_import `
+            --hidden-import=pyodbc `
+            --collect-all=pystray `
+            --collect-all=PIL `
+            --collect-all=py7zr `
+            onec_backup_manager.py
+          if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed ($LASTEXITCODE)" }
+          if (-not (Test-Path 'dist/1CBackupManager.exe')) { throw 'EXE was not produced' }
+
+      - name: Create SHA256SUMS
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash -Algorithm SHA256 'dist/1CBackupManager.exe').Hash.ToLowerInvariant()
+          "$hash  1CBackupManager.exe" | Set-Content -Path 'dist/SHA256SUMS.txt' -Encoding utf8
+
+      - name: Upload EXE as an Actions artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: 1CBackupManager-windows
+          path: |
+            dist/1CBackupManager.exe
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          MANUAL_TAG: ${{ inputs.version_tag }}
+        run: |
+          $tag = if ($env:EVENT_NAME -eq 'workflow_dispatch') { $env:MANUAL_TAG } else { $env:REF_NAME }
+          if ($tag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw "Invalid release tag: $tag" }
+          $notes = "1C Backup Manager $tag - Windows x64 build. Test restore before production use. SHA256SUMS included."
+          gh release view $tag --json name *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag 'dist/1CBackupManager.exe' 'dist/SHA256SUMS.txt' --clobber
+          } else {
+            gh release create $tag 'dist/1CBackupManager.exe' 'dist/SHA256SUMS.txt' --target "$env:GITHUB_SHA" --title "1C Backup Manager $tag" --notes "$notes"
+          }
+          if ($LASTEXITCODE -ne 0) { throw "GitHub release upload failed ($LASTEXITCODE)" }
