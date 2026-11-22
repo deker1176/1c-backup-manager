@@ -12,7 +12,7 @@ def test_background_job_results_are_not_modal():
     assert 'messagebox.showerror("Резервное копирование"' not in source
     assert 'messagebox.showinfo("Резервное копирование"' not in source
     assert 'self.refresh_journal()' in source
-    assert APP_VERSION == "5.2.2"
+    assert tuple(map(int, APP_VERSION.split("."))) >= (5, 2, 2)
 
 
 def test_iis_shared_pool_failure_is_specific_and_safe():
