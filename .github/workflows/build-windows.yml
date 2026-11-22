@@ -63,6 +63,12 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements-build.txt
+          python -m pip install -r requirements-test.txt
+
+      - name: Test IIS maintenance on Windows
+        shell: pwsh
+        run: |
+          python -m pytest -q test_v50.py test_v52.py test_v53.py
 
       - name: Build EXE
         shell: pwsh
@@ -85,8 +91,8 @@ jobs:
             --hidden-import=report_delivery `
             --hidden-import=onec_tasks_8 `
             --hidden-import=file_session_control `
-          --hidden-import=file_lock_diagnostics `
-          --hidden-import=iis_maintenance `
+            --hidden-import=file_lock_diagnostics `
+            --hidden-import=iis_maintenance `
             --hidden-import=run_journal `
             --hidden-import=ibases_import `
             --hidden-import=pyodbc `
