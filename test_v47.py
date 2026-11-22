@@ -28,7 +28,7 @@ class Test47(unittest.TestCase):
         self.assertEqual(cfg['cluster_user'], 'existing-admin')
         # The actual UI snapshot is covered by the display smoke test below.
         self.assertNotIn('Дополнительно', SystemSettingsDialog.PAGES)
-        self.assertNotIn('Файлы архивов', SystemSettingsDialog.PAGES)
+        self.assertIn('Файлы архивов', SystemSettingsDialog.PAGES)
 
     def test_server_from_job_with_new_empty_defaults(self):
         cfg = dict(core.DEFAULT_CONFIG)

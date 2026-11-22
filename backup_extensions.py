@@ -435,8 +435,16 @@ def global_backup_lock(base_dir: Path):
     The file remains but the OS byte lock is automatically released after crashes.
     """
     lock_path = Path(base_dir) / "backup.lock"
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with lock_path.open("a+b") as lock:
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_file = lock_path.open("a+b")
+    except OSError as exc:
+        raise RuntimeError(
+            f"Корневая папка копий «{base_dir}» недоступна. "
+            "Откройте «Сервис → Параметры программы → Файлы архивов», "
+            "выберите существующий диск и проверьте права учётной записи службы."
+        ) from exc
+    with lock_file as lock:
         lock.seek(0)
         if lock.read(1) != b"X":
             lock.seek(0)

@@ -1037,7 +1037,7 @@ class EffectorTaskEditor(tk.Toplevel):
 class SystemSettingsDialog(tk.Toplevel):
     """Compact Effector-style system options with a real SMTP/Telegram section."""
     PAGES = ["Автозапуск", "Параметры агента", "Параметры менеджера",
-             "Журнал", "Служебные", "Отчеты", "Язык программы"]
+             "Файлы архивов", "Журнал", "Служебные", "Отчеты", "Язык программы"]
     CLOSE_ACTIONS = {"ask": "Спрашивать при закрытии", "tray": "Сворачивать в трей",
                      "exit": "Закрывать интерфейс"}
 
@@ -1051,7 +1051,7 @@ class SystemSettingsDialog(tk.Toplevel):
         self.grab_set()
         cfg, sec = owner.cfg, owner.sec
         self.v = {}
-        for key in ("wait_seconds", "service_poll_seconds"):
+        for key in ("wait_seconds", "service_poll_seconds", "backup_root"):
             self.v[key] = tk.StringVar(value=str(cfg.get(key, "")))
         self.language_var = tk.StringVar(value="English" if cfg.get("ui_language") == "en" else "Русский")
         self.force = tk.BooleanVar(value=bool(cfg.get("force_terminate", True)))
@@ -1092,10 +1092,11 @@ class SystemSettingsDialog(tk.Toplevel):
         self._autostart(contents[0])
         self._agent(contents[1])
         self._manager(contents[2])
-        self._journal(contents[3])
-        self._service(contents[4])
-        self._reports(contents[5])
-        self._language(contents[6])
+        self._archive_files(contents[3])
+        self._journal(contents[4])
+        self._service(contents[5])
+        self._reports(contents[6])
+        self._language(contents[7])
         self.nav.selection_set(0)
         self.pages[0].lift()
         self.nav.bind("<<ListboxSelect>>", self._switch)
@@ -1139,6 +1140,51 @@ class SystemSettingsDialog(tk.Toplevel):
                         variable=self.minimize_to_tray).pack(anchor="w", pady=(10, 0))
         ttk.Label(page, text="Для сворачивания в трей требуются pystray и Pillow (сборщик EXE устанавливает их автоматически).",
                   wraplength=570, foreground="#52677b").pack(anchor="w", pady=14)
+
+    def _archive_files(self, page):
+        section_bar(page, "Файлы архивов")
+        frm = ttk.Frame(page)
+        frm.pack(fill="x", pady=5)
+        ttk.Label(frm, text="Корневая папка копий:").grid(row=0, column=0, sticky="w", padx=(0, 12), pady=4)
+        ttk.Entry(frm, textvariable=self.v["backup_root"], width=48).grid(row=0, column=1, sticky="ew", pady=4)
+        ttk.Button(frm, text="...", width=4, command=self._browse_backup_root).grid(row=0, column=2, padx=(6, 0), pady=4)
+        frm.columnconfigure(1, weight=1)
+        ttk.Label(page,
+                  text="Используется для служебной блокировки, журналов и заданий без собственной папки. "
+                       "Если у базы указана отдельная папка (например C:\\BCP), её архивы сохраняются туда.",
+                  wraplength=600, foreground="#52677b", justify="left").pack(anchor="w", pady=(10, 5))
+        ttk.Label(page,
+                  text="Выбранный диск должен существовать и быть доступен учётной записи службы Windows.",
+                  wraplength=600, foreground="#a94b34", justify="left").pack(anchor="w", pady=5)
+
+    def _browse_backup_root(self):
+        start = self.v["backup_root"].get().strip()
+        initial = start if start and Path(start).is_dir() else None
+        selected = filedialog.askdirectory(parent=self, title="Корневая папка копий", initialdir=initial)
+        if selected:
+            self.v["backup_root"].set(os.path.normpath(selected))
+
+    @staticmethod
+    def validate_backup_root(value):
+        """Validate the common storage root before saving settings."""
+        value = str(value or "").strip()
+        if not value:
+            raise ValueError("Укажите корневую папку копий в разделе «Файлы архивов».")
+        target = Path(value)
+        if os.name == "nt":
+            if not target.is_absolute():
+                raise ValueError("Укажите полный путь к папке копий, например C:\\BCP.")
+            drive = target.drive
+            if drive and len(drive) == 2 and drive[1] == ":" and not Path(drive + "\\").exists():
+                raise ValueError(f"Диск {drive} недоступен. Выберите существующий диск в разделе «Файлы архивов».")
+            try:
+                target.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                raise ValueError(f"Не удаётся создать или открыть корневую папку копий: {target}. "
+                                 "Проверьте диск и права пользователя Windows-службы.") from exc
+            if not target.is_dir():
+                raise ValueError(f"Путь не является каталогом: {target}")
+        return value
 
     def _journal(self, page):
         section_bar(page, "Журнал")
@@ -1250,6 +1296,7 @@ class SystemSettingsDialog(tk.Toplevel):
     def save(self):
         try:
             cfg, sec = self._settings_snapshot()
+            cfg["backup_root"] = self.validate_backup_root(cfg.get("backup_root"))
             changed_language = cfg.get("ui_language", "ru") != self.owner.cfg.get("ui_language", "ru")
             self.owner.persist(cfg, sec)
             self.destroy()
@@ -1263,7 +1310,7 @@ def create_app_class(backend):
         def __init__(self):
             super().__init__()
             self.backend = backend
-            self.title("1C Backup Manager v4.8 — резервное копирование")
+            self.title("1C Backup Manager v4.9 — резервное копирование")
             self.geometry("920x740")
             self.minsize(750, 590)
             self.style()
