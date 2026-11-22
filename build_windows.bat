@@ -4,7 +4,7 @@ chcp 65001 >nul
 cd /d "%~dp0"
 
 echo.
-echo Building 1C Backup Manager v5.0 with SQL, ZIP, 7z and FTPS support...
+echo Building 1C Backup Manager v5.1 with SQL, ZIP, 7z and FTPS support...
 echo.
 
 where py >nul 2>&1
@@ -40,6 +40,7 @@ py -3 -m PyInstaller ^
   --hidden-import=report_delivery ^
   --hidden-import=onec_tasks_8 ^
   --hidden-import=file_session_control ^
+  --hidden-import=run_journal ^
   --collect-all=pystray ^
   --collect-all=PIL ^
   --hidden-import=ibases_import ^

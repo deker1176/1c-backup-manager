@@ -1,8 +1,9 @@
-"""Effector-style task manager UI for 1C Backup Manager v5.0."""
+"""Effector-style task manager UI for 1C Backup Manager v5.1."""
 from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime
+from run_journal import list_task_runs, read_task_log, next_scheduled_start, prune_task_runs
 from pathlib import Path
 import queue
 import os
@@ -426,6 +427,8 @@ class EffectorTaskEditor(tk.Toplevel):
         self.legacy_ftp_selected = bool(self.job.get("ftp_enabled", False) and not selected_targets)
         self.v["connection_kind"] = tk.StringVar(value=self.job.get("connection_kind", "server"))
         self.v["file_disconnect_mode"] = tk.StringVar(value=self.job.get("file_disconnect_mode", "wait_only"))
+        self.v["file_auto_disconnect"] = tk.BooleanVar(value=bool(
+            self.job.get("file_force_confirmed") and self.job.get("file_disconnect_mode", "wait_only") != "wait_only"))
         self.v["command_before"] = tk.StringVar(value=str(self.job.get("command_before", "")))
         self.v["command_after"] = tk.StringVar(value=str(self.job.get("command_after", "")))
         self.v["command_body"] = tk.StringVar(value=str(self.job.get("command_body", "")))
@@ -607,56 +610,64 @@ class EffectorTaskEditor(tk.Toplevel):
 
     def page_1c_disconnect(self, page):
         section_bar(page, "Завершение работы пользователей")
-        box = ttk.LabelFrame(page, text="Параметры отключения пользователей", padding=10)
-        box.pack(fill="x")
-        ttk.Label(box, text="Запретить новые сеансы → дождаться выхода → принудительное завершение при необходимости → DumpIB → разблокировать.",
-                  wraplength=500).pack(anchor="w")
-        frm = ttk.Frame(page)
-        frm.pack(fill="x", pady=14)
-        add_line(frm, "Ждать выхода пользователей, сек.", self.v["wait_seconds_override"], 0)
-        ttk.Label(frm, text="Принудительно завершать сеансы").grid(row=1, column=0, sticky="w", pady=6)
-        ttk.Combobox(frm, textvariable=self.v["force_terminate_override"],
-                     values=["По умолчанию", "Да", "Нет"], state="readonly").grid(row=1, column=1, sticky="w", pady=6)
-        # File-mode sessions cannot be managed via RAS. Target only exact /F matches.
-        fbox = ttk.LabelFrame(page, text="Файловая база — отключение клиентов Windows", padding=8)
-        fbox.pack(fill="x", pady=(5, 8))
-        ttk.Radiobutton(fbox, text="Только ожидать выхода пользователей (по умолчанию)",
-                        variable=self.v["file_disconnect_mode"], value="wait_only").pack(anchor="w")
-        ttk.Radiobutton(fbox, text="Принудительно завершать сеансы на этом ПК",
-                        variable=self.v["file_disconnect_mode"], value="force_local").pack(anchor="w")
-        ttk.Radiobutton(fbox, text="Принудительно локально и на указанных ПК (WinRM)",
-                        variable=self.v["file_disconnect_mode"], value="force_hosts").pack(anchor="w")
-        ff = ttk.Frame(fbox)
-        ff.pack(fill="x")
-        add_line(ff, "Ожидать после отказа DumpIB, сек.", self.v["file_wait_seconds"], 0)
-        add_line(ff, "Удалённые ПК (через ;)", self.v["file_session_hosts"], 1)
-        add_line(ff, "Сетевые пути к этой базе (через ;)", self.v["file_base_aliases"], 2)
-        ttk.Checkbutton(fbox, text="Подтверждаю: несохранённые данные пользователей могут быть потеряны",
-                        variable=self.v["file_force_confirmed"]).pack(anchor="w", pady=5)
-        ttk.Label(fbox, text="Завершаются только процессы 1С с точно совпадающим путём /F к этой базе. "
-                         "Другие базы, Конфигуратор и неопознанные сеансы не трогаются. "
-                         "Для удалённых ПК нужны включённый WinRM и права администратора.",
-                  foreground="#9a482b", wraplength=540).pack(anchor="w", pady=3)
-        # This is required only on clusters configured with an administrator.
-        # Keep credentials for existing tasks, but hide advanced RAS settings by default.
-        self.cluster_auth_expanded = tk.BooleanVar(value=bool(
-            self.v["cluster_user"].get() or self.v["cluster_job_password"].get()))
-        auth_box = ttk.Frame(page)
-        def toggle_cluster_auth():
-            if self.cluster_auth_expanded.get():
-                auth_box.pack(fill="x", pady=4)
-            else:
-                auth_box.pack_forget()
-        ttk.Checkbutton(page, text="Кластер 1С требует отдельного администратора (дополнительно)",
-                        variable=self.cluster_auth_expanded,
-                        command=toggle_cluster_auth).pack(anchor="w", pady=(8, 0))
-        auth_fields = ttk.Frame(auth_box)
-        auth_fields.pack(fill="x")
-        add_line(auth_fields, "Администратор кластера (не ИБ)", self.v["cluster_user"], 0)
-        add_line(auth_fields, "Пароль администратора кластера", self.v["cluster_job_password"], 1, password=True)
-        ttk.Label(auth_box, text="Заполняйте только если администратор кластера действительно задан. Пароль защищён Windows DPAPI.",
-                  foreground="#52677b", wraplength=540).pack(anchor="w", pady=5)
-        toggle_cluster_auth()
+        mode = self.v["connection_kind"].get()
+        if mode == "file":
+            ttk.Label(page,
+                      text="Программа попытается освободить именно выбранную файловую базу "
+                           "перед резервным копированием. Способ отключения определяется автоматически "
+                           "по доступным данным Windows.",
+                      wraplength=560, justify="left").pack(anchor="w", pady=7)
+            ttk.Checkbutton(page,
+                            text="Автоматически завершать пользователей перед созданием копии",
+                            variable=self.v["file_auto_disconnect"]).pack(anchor="w", pady=10)
+            detail = ttk.Frame(page)
+            detail.pack(fill="x", pady=8)
+            add_line(detail, "Время ожидания выхода пользователей, сек.", self.v["file_wait_seconds"], 0)
+            self.file_more = tk.BooleanVar(value=bool(
+                self.v["file_session_hosts"].get() or self.v["file_base_aliases"].get()))
+            extra = ttk.LabelFrame(page, text="Дополнительные сведения о подключениях (необязательно)", padding=8)
+            add_line(extra, "Компьютеры пользователей (через ;)", self.v["file_session_hosts"], 0)
+            add_line(extra, "Сетевые пути к базе (через ;)", self.v["file_base_aliases"], 1)
+            def toggle():
+                if self.file_more.get():
+                    extra.pack(fill="x", pady=4)
+                else:
+                    extra.pack_forget()
+            ttk.Checkbutton(page, text="Дополнительные параметры подключения",
+                            variable=self.file_more, command=toggle).pack(anchor="w", pady=4)
+            toggle()
+            ttk.Label(page,
+                      text="Внимание: принудительное завершение может привести к потере "
+                           "несохранённых данных. Файловая 1С не предоставляет RAS: "
+                           "если сеанс не удаётся однозначно определить или публикация "
+                           "обслуживается общим IIS/Apache, программа не будет останавливать "
+                           "чужие процессы и службы.",
+                      wraplength=560, justify="left", foreground="#9a482b").pack(anchor="w", pady=12)
+        else:
+            ttk.Label(page, text="Клиент-серверная база: остановка сеансов через RAS.",
+                      wraplength=540, justify="left").pack(anchor="w", pady=7)
+            frm = ttk.Frame(page)
+            frm.pack(fill="x", pady=12)
+            add_line(frm, "Ждать выхода пользователей, сек.", self.v["wait_seconds_override"], 0)
+            ttk.Label(frm, text="Принудительно завершать сеансы").grid(row=1, column=0, sticky="w", pady=6)
+            ttk.Combobox(frm, textvariable=self.v["force_terminate_override"],
+                         values=["По умолчанию", "Да", "Нет"], state="readonly").grid(row=1, column=1, sticky="w", pady=6)
+            self.cluster_auth_expanded = tk.BooleanVar(value=bool(
+                self.v["cluster_user"].get() or self.v["cluster_job_password"].get()))
+            auth_box = ttk.Frame(page)
+            def toggle_cluster_auth():
+                if self.cluster_auth_expanded.get():
+                    auth_box.pack(fill="x", pady=4)
+                else:
+                    auth_box.pack_forget()
+            ttk.Checkbutton(page, text="Кластер 1С требует отдельного администратора (дополнительно)",
+                            variable=self.cluster_auth_expanded,
+                            command=toggle_cluster_auth).pack(anchor="w", pady=(8, 0))
+            auth_fields = ttk.Frame(auth_box)
+            auth_fields.pack(fill="x")
+            add_line(auth_fields, "Администратор кластера (не ИБ)", self.v["cluster_user"], 0)
+            add_line(auth_fields, "Пароль администратора кластера", self.v["cluster_job_password"], 1, password=True)
+            toggle_cluster_auth()
 
     def page_1c_check(self, page):
         section_bar(page, "Параметры тестирования и исправления 1С 8")
@@ -998,8 +1009,13 @@ class EffectorTaskEditor(tk.Toplevel):
         job["repair_bad_refs"] = self.v["repair_bad_refs"].get()
         job["repair_bad_data"] = self.v["repair_bad_data"].get()
         job["connection_kind"] = self.v["connection_kind"].get()
-        job["file_disconnect_mode"] = self.v["file_disconnect_mode"].get()
         if job.get("type") == "1c" and job["connection_kind"] == "file":
+            automatically = bool(self.v["file_auto_disconnect"].get())
+            job["file_force_confirmed"] = automatically
+            job["file_disconnect_mode"] = (
+                "force_hosts" if str(job.get("file_session_hosts") or "").strip()
+                else "force_local"
+            ) if automatically else "wait_only"
             from file_session_control import validate_file_disconnect_settings
             validate_file_disconnect_settings(job)
         job["platform_mode"] = next((key for key, label in PLATFORM_DISPLAY.items() if label == source_value(self.platform_display.get())), "inherit")
@@ -1337,7 +1353,7 @@ def create_app_class(backend):
         def __init__(self):
             super().__init__()
             self.backend = backend
-            self.title("1C Backup Manager v5.0 — резервное копирование")
+            self.title("1C Backup Manager v5.1 — резервное копирование")
             self.geometry("920x740")
             self.minsize(750, 590)
             self.style()
@@ -1362,6 +1378,10 @@ def create_app_class(backend):
             translate_widgets(self, self.cfg.get("ui_language", "ru"))
             self.refresh_jobs()
             self.refresh_journal()
+            try:
+                prune_task_runs(self.cfg.get("journal_retention_days", 60))
+            except OSError:
+                pass
             self.protocol("WM_DELETE_WINDOW", self.on_close_request)
             self.bind("<Unmap>", self._on_unmap)
             self.after(200, self.poll)
@@ -1448,9 +1468,20 @@ def create_app_class(backend):
             ttk.Button(tools, text="Проверить", command=self.test_selected).pack(side="left", padx=2)
             ttk.Button(tools, text="Хранилища", command=self.open_profiles).pack(side="right", padx=2)
 
-            ttk.Label(page_active, text="Текущие и последние операции", font=("Segoe UI", 11, "bold")).pack(anchor="w", pady=(6, 6), padx=6)
-            self.active_text = tk.Text(page_active, font=("Consolas", 9), state="disabled")
-            self.active_text.pack(fill="both", expand=True, padx=6, pady=4)
+            self.active_tree = ttk.Treeview(
+                page_active, columns=("job", "next", "last", "status"),
+                show="headings", style="Classic.Treeview")
+            for col, title, width in (
+                ("job", "Имя задачи", 270),
+                ("next", "Время следующего запуска", 205),
+                ("last", "Время прошлого запуска", 205),
+                ("status", "Состояние", 190)):
+                self.active_tree.heading(col, text=title)
+                self.active_tree.column(col, width=width, stretch=(col == "job"))
+            self.active_tree.pack(side="left", fill="both", expand=True)
+            active_scroll = ttk.Scrollbar(page_active, orient="vertical", command=self.active_tree.yview)
+            active_scroll.pack(side="right", fill="y")
+            self.active_tree.configure(yscrollcommand=active_scroll.set)
 
             lower = ttk.Notebook(top)
             lower.pack(fill="both", expand=True, pady=(5, 0))
@@ -1466,6 +1497,8 @@ def create_app_class(backend):
                 self.journal.heading(col, text=title)
                 self.journal.column(col, width=width, stretch=col == "result")
             self.journal.pack(fill="both", expand=True)
+            self.journal.bind("<Double-1>", self.open_journal_details)
+            self.journal_records = {}
             self.archives = ttk.Treeview(backups_page, columns=("name", "size", "modified"), show="headings")
             for col, title, width in [("name", "Файл", 600), ("size", "Размер, МБ", 110), ("modified", "Дата", 180)]:
                 self.archives.heading(col, text=title)
@@ -1527,6 +1560,7 @@ def create_app_class(backend):
             self.summary.set((f"Tasks: {len(self.jobs)}  •  Enabled: {enabled}" if self.cfg.get("ui_language") == "en"
                               else f"Всего заданий: {len(self.jobs)}  •  Включено: {enabled}"))
             self.refresh_archives()
+            self.refresh_active_tasks()
             self.refresh_service_status()
 
         def selected_folder(self):
@@ -1644,19 +1678,118 @@ def create_app_class(backend):
                 self.archives.insert("", "end", values=(str(p.relative_to(root)), f"{p.stat().st_size/1048576:.2f}", datetime.fromtimestamp(p.stat().st_mtime).strftime("%d.%m.%Y %H:%M:%S")))
 
         def refresh_journal(self):
+            current = self.journal.selection()[0] if self.journal.selection() else None
             self.journal.delete(*self.journal.get_children())
+            history = list_task_runs(limit=500)
+            self.journal_records = {r["run_id"]: r for r in history}
+            for record in history:
+                status = record.get("status")
+                display = ("Успешное выполнение" if status == "ok" else
+                           "Ошибка выполнения" if status == "error" else
+                           "Выполняется" if status == "running" else "Прервано")
+                message = record.get("message") or ""
+                result = f"{display} задачи: {record.get('job_name', 'Задание')}"
+                if status == "error" and message:
+                    result += f" — {message[:170]}"
+                self.journal.insert("", "end", iid=record["run_id"],
+                                    values=(record.get("start", ""), record.get("end", ""), result))
+            # Existing installations retain their previous last-run summary until
+            # a new 5.1 attempt creates a full per-run journal.
+            existing = {r.get("job_key") for r in history}
             state = self.backend.load_scheduler_state()
-            rows = []
-            for job in self.jobs:
-                entry = self.backend.get_db_state(job, state)
-                start = entry.get("last_attempt_time", "")
-                if not start:
+            for i, job in enumerate(self.jobs):
+                if self.backend.job_key(job) in existing:
                     continue
-                end = entry.get("last_success_time", start)
-                result = entry.get("last_error", "") if entry.get("last_result") == "error" else f"Успешное выполнение задачи: {job.get('name')}"
-                rows.append((start, end, result))
-            for row in sorted(rows, reverse=True):
-                self.journal.insert("", "end", values=row)
+                item = self.backend.get_db_state(job, state)
+                if not item.get("last_attempt_time"):
+                    continue
+                rid = f"legacy_{i}"
+                self.journal_records[rid] = {
+                    "run_id": rid, "job_name": job.get("name"),
+                    "start": item.get("last_attempt_time"), "end": "",
+                    "status": item.get("last_result"),
+                    "message": item.get("last_error") or "",
+                }
+                status_text = "Ошибка" if item.get("last_result") == "error" else "Успех"
+                self.journal.insert("", "end", iid=rid,
+                                    values=(item.get("last_attempt_time"), "",
+                                            f"{status_text}: {job.get('name')} (ранний журнал)"))
+            if current and self.journal.exists(current):
+                self.journal.selection_set(current)
+
+        def refresh_active_tasks(self):
+            now = datetime.now()
+            current = self.active_tree.selection()[0] if self.active_tree.selection() else None
+            self.active_tree.delete(*self.active_tree.get_children())
+            state = self.backend.load_scheduler_state()
+            latest = {}
+            for record in list_task_runs(limit=500):
+                key = record.get("job_key")
+                if key and key not in latest:
+                    latest[key] = record
+            for idx, job in enumerate(self.jobs):
+                item = self.backend.get_db_state(job, state)
+                if not job.get("enabled", True):
+                    continue
+                next_time = next_scheduled_start(
+                    job.get("schedule_time"), item.get("last_scheduled_date", ""), now)
+                next_label = next_time.strftime("%d.%m.%Y %H:%M:%S") if next_time else "Без расписания"
+                history = latest.get(self.backend.job_key(job), {})
+                previous = history.get("start") or item.get("last_attempt_time") or "—"
+                status = history.get("status") or item.get("last_result") or ""
+                status_label = {
+                    "running": "Выполняется", "ok": "Успешно", "error": "Ошибка",
+                    "interrupted": "Прервано",
+                }.get(status, "Ожидание")
+                self.active_tree.insert("", "end", iid=f"active_{idx}",
+                                        values=(job.get("name") or job.get("ref"),
+                                                next_label, previous, status_label))
+            if current and self.active_tree.exists(current):
+                self.active_tree.selection_set(current)
+
+        def open_journal_details(self, event=None):
+            selected = self.journal.selection()
+            if not selected:
+                return
+            record = self.journal_records.get(selected[0])
+            if not record:
+                return
+            win = tk.Toplevel(self)
+            win.title(f"Журнал задачи: {record.get('job_name', 'Задание')}")
+            win.geometry("940x640")
+            win.minsize(640, 400)
+            win.transient(self)
+            head = ttk.Frame(win, padding=12)
+            head.pack(fill="x")
+            ttk.Label(head, text=f"Задача: {record.get('job_name', '')}",
+                      font=("Segoe UI", 11, "bold")).pack(anchor="w")
+            ttk.Label(head, text=f"Начало: {record.get('start') or '—'}    "
+                                 f"Конец: {record.get('end') or '—'}    "
+                                 f"Результат: {record.get('status') or '—'}").pack(anchor="w", pady=5)
+            body = ttk.Frame(win, padding=(12, 0, 12, 8))
+            body.pack(fill="both", expand=True)
+            viewer = tk.Text(body, font=("Consolas", 9), wrap="none")
+            scroll_y = ttk.Scrollbar(body, orient="vertical", command=viewer.yview)
+            scroll_x = ttk.Scrollbar(body, orient="horizontal", command=viewer.xview)
+            viewer.configure(yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set)
+            viewer.grid(row=0, column=0, sticky="nsew")
+            scroll_y.grid(row=0, column=1, sticky="ns")
+            scroll_x.grid(row=1, column=0, sticky="ew")
+            body.rowconfigure(0, weight=1)
+            body.columnconfigure(0, weight=1)
+            log_text = read_task_log(record)
+            if record.get("run_id", "").startswith("legacy_"):
+                log_text = ("Подробный журнал предыдущих версий не сохранялся по запускам.\n\n"
+                            + str(record.get("message") or ""))
+            viewer.insert("1.0", log_text)
+            viewer.configure(state="disabled")
+            buttons = ttk.Frame(win, padding=(12, 3, 12, 10))
+            buttons.pack(fill="x")
+            def copy_log():
+                win.clipboard_clear()
+                win.clipboard_append(log_text)
+            ttk.Button(buttons, text="Копировать лог", command=copy_log).pack(side="left")
+            ttk.Button(buttons, text="Закрыть", command=win.destroy).pack(side="right")
 
         def refresh_service_status(self):
             # Windows SCM is the source of truth. Query via ctypes instead of
@@ -1684,7 +1817,7 @@ def create_app_class(backend):
                 while True:
                     kind, data = self.q.get_nowait()
                     if kind == "log":
-                        for widget in (self.rawlog, self.active_text):
+                        for widget in (self.rawlog,):
                             widget.configure(state="normal")
                             widget.insert("end", data + "\n")
                             widget.see("end")

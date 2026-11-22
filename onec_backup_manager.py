@@ -42,7 +42,7 @@ from backup_extensions import (
 )
 
 APP_NAME = "1C Backup Manager"
-APP_VERSION = "5.0"
+APP_VERSION = "5.1"
 CONTACT_TELEGRAM = "@dek76"
 CONFIG_NAME = "config.json"
 SECRETS_NAME = "secrets.dat"
@@ -1207,26 +1207,59 @@ def run_any_backup(cfg: dict, sec: dict, job: dict, log=print) -> Path:
 
 
 def execute_job(cfg: dict, sec: dict, job: dict, log=print, scheduled=False):
-    """One path for GUI, service and CLI, including opt-in status notifications.
-
-    Never mark a finished backup as failed because SMTP/Telegram delivery failed.
-    """
+    """One execution path for GUI/service, with durable per-run journal."""
     from report_delivery import notify_task_result
+    from run_journal import begin_task_run
+
+    history = None
     try:
-        artifact = run_any_backup(cfg, sec, job, log)
+        history = begin_task_run(job, scheduled=scheduled)
+    except OSError as exc:
+        log(f"Предупреждение: журнал запусков недоступен: {exc}")
+
+    def task_log(line):
+        if history is not None:
+            try:
+                history.log(line)
+            except OSError:
+                pass
+        log(line)
+
+    try:
+        artifact = run_any_backup(cfg, sec, job, task_log)
     except Exception as exc:
         msg = friendly_error_message(exc, str(exc))
-        record_backup_result(job, False, error=msg, scheduled=scheduled)
+        task_log("ОШИБКА: " + msg)
+        if history is not None:
+            try:
+                history.log(traceback.format_exc())
+            except OSError:
+                pass
         try:
-            notify_task_result(cfg, sec, job, False, error=msg, log=log)
-        except Exception:
-            log("Предупреждение: не удалось отправить отчёт об ошибке")
+            record_backup_result(job, False, error=msg, scheduled=scheduled)
+            try:
+                notify_task_result(cfg, sec, job, False, error=msg, log=task_log)
+            except Exception:
+                task_log("Предупреждение: не удалось отправить отчёт об ошибке")
+        finally:
+            if history is not None:
+                try:
+                    history.finish(False, message=msg)
+                except OSError:
+                    pass
         raise
-    record_backup_result(job, True, scheduled=scheduled)
     try:
-        notify_task_result(cfg, sec, job, True, artifact=artifact, log=log)
-    except Exception:
-        log("Предупреждение: не удалось отправить уведомление об успешной копии")
+        record_backup_result(job, True, scheduled=scheduled)
+        try:
+            notify_task_result(cfg, sec, job, True, artifact=artifact, log=task_log)
+        except Exception:
+            task_log("Предупреждение: не удалось отправить уведомление об успешной копии")
+    finally:
+        if history is not None:
+            try:
+                history.finish(True, message="Успешное выполнение задания", artifact=artifact)
+            except OSError:
+                pass
     return artifact
 
 
@@ -1328,6 +1361,11 @@ def scheduler_loop(stop_checker, logger=service_log):
             now = datetime.now()
             if last_log_cleanup != now.date():
                 prune_manager_logs(cfg, logger, now)
+                try:
+                    from run_journal import prune_task_runs
+                    prune_task_runs(cfg.get("journal_retention_days", 60), now=now)
+                except OSError as exc:
+                    logger(f"Предупреждение: очистка журнала запусков не выполнена: {exc}")
                 last_log_cleanup = now.date()
 
             # Sort by configured time so overdue databases are processed in the
