@@ -1,4 +1,4 @@
-"""Effector-style task manager UI for 1C Backup Manager v5.1."""
+"""Effector-style task manager UI for 1C Backup Manager."""
 from __future__ import annotations
 
 from copy import deepcopy
@@ -1353,7 +1353,7 @@ def create_app_class(backend):
         def __init__(self):
             super().__init__()
             self.backend = backend
-            self.title("1C Backup Manager v5.1 — резервное копирование")
+            self.title(f"1C Backup Manager v{backend.APP_VERSION} — резервное копирование")
             self.geometry("920x740")
             self.minsize(750, 590)
             self.style()
