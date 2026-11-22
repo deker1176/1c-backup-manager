@@ -195,10 +195,10 @@ def diagnose_file_1c_lock(job, log=print):
         log(f"Файловая 1С: диагностика блокировок Windows недоступна: {exc}")
     try:
         for pub in iis_publications_for_base(base):
-            note = ("общий пул, отключать его нельзя" if pub["shared"]
-                    else "отдельный пул; автоматическая остановка выключена")
+            note = ("общий пул, остановка только по отдельному разрешению" if pub["shared"]
+                    else "отдельный пул, остановка только по отдельному разрешению")
             log(f"Файловая 1С: IIS-публикация {pub['app']}, пул {pub['pool']} "
-                f"({note}); приложение не завершает процессы IIS")
+                f"({note}); процессы w3wp.exe не завершаются вручную")
     except (OSError, RuntimeError, ValueError) as exc:
         log(f"Файловая 1С: диагностика IIS недоступна: {exc}")
     try:
