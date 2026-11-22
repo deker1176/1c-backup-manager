@@ -1,10 +1,20 @@
-# 1C Backup Manager v4.8
+# 1C Backup Manager v5.4.1
 
 Windows backup manager for **1C:Enterprise 8.x**, **Microsoft SQL Server**, and **files/directories**.
 
 **Russian documentation:** [README_RU.md](README_RU.md) · **Contact:** [Telegram @dek76](https://t.me/dek76)
 
 > **Release status:** This is the source code distribution. Windows binaries are built by the GitHub Actions workflow in this repository. A released EXE is a build artifact, not evidence of a successful production backup: test each job and verify that it can be restored.
+
+## v5.4.1: verified IIS backup run (restore still pending)
+
+[Latest release v5.4.1](https://github.com/deker1176/1c-backup-manager/releases/tag/v5.4.1) · [Download Windows EXE](https://github.com/deker1176/1c-backup-manager/releases/download/v5.4.1/1CBackupManager.exe)
+
+On November 23, 2026, a real Windows file-based 1C infobase (C:\Base\unf) was backed up through an IIS publication sharing DefaultAppPool. The manager detected the publication, registered emergency restoration, confirmed the pool was Stopped in 45 seconds, copied the infobase while holding an exclusive file handle, restarted IIS **before** DumpIB, and produced a .dt with SHA-256 and journal (result: ok). The user confirmed the web service was working again afterward.
+
+**Not yet verified:** restoration of this .dt into a separate empty 1C infobase. File size, SHA-256, and a successful DumpIB do not substitute for a restore test. Read the detailed [Russian field-test report and isolated restore checklist](README_RU.md#проверка-реального-резервного-копирования--23112026-v541). This run does not validate Apache, SMB, RAS, or other deployments.
+
+Shared IIS pool or Apache service shutdown must be enabled explicitly, and temporarily interrupts all hosted sites. Unsaved client operations can be lost.
 
 ## Features
 
@@ -43,7 +53,7 @@ The [Build Windows EXE](.github/workflows/build-windows.yml) workflow:
 - saves `1CBackupManager-windows` as an Actions artifact on each push to `main`;
 - publishes binaries to **Releases** when triggered by tag `v*` or manually with **Publish GitHub Release = true**.
 
-To publish v4.8.0 manually: **Actions → Build Windows EXE → Run workflow → Publish GitHub Release → Version tag `v4.8.0`**. The release will be published only after the checks and Windows build succeed. GitHub Actions needs permission to write repository contents for creating Releases.
+To publish a future release manually: **Actions → Build Windows EXE → Run workflow → Publish GitHub Release**, and choose the new version tag. The release will be published only after the checks and Windows build succeed. GitHub Actions needs permission to write repository contents for creating Releases.
 
 ## Security
 
