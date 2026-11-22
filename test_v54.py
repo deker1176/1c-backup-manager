@@ -8,7 +8,7 @@ import os
 import pytest
 
 import web_maintenance as web
-from effector_gui import TaskDialog
+from effector_gui import EffectorTaskEditor
 from onec_backup_manager import APP_VERSION, normalize_db, run_file_1c_backup
 
 
@@ -121,7 +121,7 @@ def test_legacy_settings_do_not_grant_new_permission():
 
 
 def test_gui_hides_pool_name_and_time_fields():
-    src = inspect.getsource(TaskDialog.page_1c_disconnect)
+    src = inspect.getsource(EffectorTaskEditor.page_1c_disconnect)
     assert "file_web_maintenance_enabled" in src
     assert "file_auto_disconnect" in src
     assert "file_iis_pool_name" not in src
