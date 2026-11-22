@@ -16,7 +16,7 @@ on:
         description: 'Release tag (e.g. v4.8.0)'
         required: true
         type: string
-        default: 'v5.1.0'
+        default: 'v5.2.0'
 
 permissions:
   contents: write
@@ -43,7 +43,7 @@ jobs:
 
       - name: Run tests
         run: |
-          xvfb-run -a python -m pytest -q test_v4.py test_v41.py test_v43.py test_v44.py test_v45.py test_v46.py test_v47.py test_v48.py test_v49.py test_v50.py test_v51.py
+          xvfb-run -a python -m pytest -q test_v4.py test_v41.py test_v43.py test_v44.py test_v45.py test_v46.py test_v47.py test_v48.py test_v49.py test_v50.py test_v51.py test_v52.py
 
   windows:
     name: Package Windows EXE
@@ -85,6 +85,7 @@ jobs:
             --hidden-import=report_delivery `
             --hidden-import=onec_tasks_8 `
             --hidden-import=file_session_control `
+          --hidden-import=file_lock_diagnostics `
             --hidden-import=run_journal `
             --hidden-import=ibases_import `
             --hidden-import=pyodbc `
@@ -120,7 +121,7 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
           MANUAL_TAG: ${{ inputs.version_tag }}
         run: |
-          $tag = if ($env:EVENT_NAME -eq 'workflow_dispatch') { $env:MANUAL_TAG } elseif ($env:REF_NAME -eq 'main') { 'v5.1.0' } else { $env:REF_NAME }
+          $tag = if ($env:EVENT_NAME -eq 'workflow_dispatch') { $env:MANUAL_TAG } elseif ($env:REF_NAME -eq 'main') { 'v5.2.0' } else { $env:REF_NAME }
           if ($tag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw "Invalid release tag: $tag" }
           $notes = "1C Backup Manager $tag - Windows x64 build. Test restore before production use. SHA256SUMS included."
           gh release view $tag --json name *> $null

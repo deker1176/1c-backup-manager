@@ -42,7 +42,7 @@ from backup_extensions import (
 )
 
 APP_NAME = "1C Backup Manager"
-APP_VERSION = "5.1"
+APP_VERSION = "5.2"
 CONTACT_TELEGRAM = "@dek76"
 CONFIG_NAME = "config.json"
 SECRETS_NAME = "secrets.dat"
@@ -1005,6 +1005,7 @@ def _is_file_1c_exclusive_error(message):
 def run_file_1c_backup(cfg: dict, sec: dict, job: dict, log=print) -> Path:
     """File-based DumpIB, optionally evicting positively identified Windows clients."""
     from file_session_control import validate_file_disconnect_settings, evict_targeted_clients
+    from file_lock_diagnostics import diagnose_file_1c_lock
     mode, grace_seconds, _ = validate_file_disconnect_settings(job)
     folder = make_target_folder(cfg, job)
     base = Path(str(job.get("one_c_file", "")).strip())
@@ -1038,8 +1039,15 @@ def run_file_1c_backup(cfg: dict, sec: dict, job: dict, log=print) -> Path:
                                 timeout=limit_seconds(24 * 3600))
         success = result.returncode == 0 and dest.exists() and dest.stat().st_size > 0
         details = _file_1c_log(outlog) or (result.stdout or "") + "\n" + (result.stderr or "")
-        if not success and details.strip():
-            log("Сообщение 1С: " + details.strip()[-1500:])
+        if not success:
+            # Do not leave a partial .dt that users might mistake for a backup.
+            if dest.exists():
+                try:
+                    dest.unlink()
+                except OSError as exc:
+                    log(f"Предупреждение: не удалось удалить неполную копию {dest}: {exc}")
+            if details.strip():
+                log("Сообщение 1С: " + details.strip()[-1500:])
         return success, result.returncode, details
 
     success, code, details = dump_attempt(1)
@@ -1051,6 +1059,7 @@ def run_file_1c_backup(cfg: dict, sec: dict, job: dict, log=print) -> Path:
                            f"{details.strip()[-1200:]}. Журнал: {outlog}")
 
     log(f"Файловая база занята. Ожидание завершения работы: {grace_seconds} сек.")
+    diagnose_file_1c_lock(job, log=log)
     if grace_seconds:
         time.sleep(grace_seconds)
     success, code, details = dump_attempt(2)

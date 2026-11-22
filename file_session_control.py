@@ -1,8 +1,8 @@
 """Safe, opt-in targeted Windows process termination for file-based 1C sessions.
 
-File mode cannot use RAS. Only clients with a command-line /F referring to the
-selected infobase can be terminated; remote computers require WinRM and admin
-permissions. This cannot guarantee eviction of every file-mode session.
+Local clients can be identified by exact /F or Restart Manager's open 1Cv8.1CD
+file handles. Remote clients still require exact paths, WinRM and admin rights.
+Shared IIS/Apache processes and SMB handles are never forcibly closed.
 """
 from __future__ import annotations
 
@@ -49,7 +49,8 @@ def commandline_matches_file_base(commandline, exe_name, allowed_paths):
     return False
 
 
-def select_matching_processes(processes, paths):
+def select_matching_processes(processes, paths, locked_pids=None):
+    locked_pids = set(locked_pids or ())
     selected = []
     seen = set()
     for process in processes:
@@ -62,7 +63,12 @@ def select_matching_processes(processes, paths):
         host = str(process.get("host") or "localhost")
         if pid <= 0 or (host, pid) in seen:
             continue
-        if commandline_matches_file_base(process.get("commandline"), process.get("name"), paths):
+        cmd = str(process.get("commandline") or "")
+        name = str(process.get("name") or "").casefold()
+        rm_match = (host == "localhost" and pid in locked_pids
+                    and name in _CLIENTS
+                    and not re.search(r"(?i)(?:^|\s)DESIGNER(?:\s|$)", cmd))
+        if commandline_matches_file_base(cmd, name, paths) or rm_match:
             selected.append(process)
             seen.add((host, pid))
     return selected
@@ -158,19 +164,29 @@ def evict_targeted_clients(job, log=print):
     paths = [str(job.get("one_c_file") or "")] + split_items(job.get("file_base_aliases", ""))
     if not paths[0].strip():
         raise ValueError("Укажите каталог файловой базы")
+    from file_lock_diagnostics import rm_locking_pids
+    locked_pids = set()
+    try:
+        locked_pids = rm_locking_pids(os.path.join(paths[0], "1Cv8.1CD"))
+        if locked_pids:
+            log(f"Файловая 1С: Restart Manager подтвердил процессы с открытым файлом базы: "
+                f"{', '.join(map(str, sorted(locked_pids)))}")
+    except (OSError, RuntimeError, ValueError) as exc:
+        log(f"Файловая 1С: Restart Manager недоступен: {exc}")
     hosts = ["localhost"] + (other_hosts if mode == "force_hosts" else [])
     selected = []
     for host in dict.fromkeys(hosts):
         processes = _powershell(host, "list")
         for p in processes:
             p["host"] = host
-        matching = select_matching_processes(processes, paths)
+        matching = select_matching_processes(processes, paths,
+                                             locked_pids if host == "localhost" else None)
         log(f"Файловая 1С: {host}: подходящих клиентских процессов: {len(matching)}")
         selected += matching
     if not selected:
-        raise RuntimeError("Не найден процесс, однозначно относящийся к этой базе. "
-                           "Укажите ПК клиентов и алиасы сетевого пути /F. "
-                           "Закрывать чужие сеансы без подтверждения пути запрещено")
+        raise RuntimeError("Не найден клиентский процесс, однозначно принадлежащий этой базе. "
+                           "Проверьте журнал диагностики IIS/SMB/Restart Manager. "
+                           "Общие IIS/Apache-процессы и чужие базы принудительно не завершаются")
     for process in selected:
         _powershell(process["host"], "terminate", process["pid"],
                     str(process["commandline"]), str(process["created"]))
