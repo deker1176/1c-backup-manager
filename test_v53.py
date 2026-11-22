@@ -90,6 +90,6 @@ def test_watchdog_remains_if_iis_restore_fails():
 def test_dumpib_uses_snapshot_not_live_base():
     source = inspect.getsource(run_file_1c_backup)
     assert "TemporaryDirectory" in source
-    assert "stage_with_iis_pause" in source
+    assert "stage_with_web_pause" in source
     assert "dump_attempt(3, actual_base=Path(stage))" in source
     assert "return dest" in source
