@@ -1823,12 +1823,13 @@ def create_app_class(backend):
                             widget.see("end")
                             widget.configure(state="disabled")
                     elif kind in ("done", "error"):
+                        # Task outcomes are already stored in the persistent per-run
+                        # journal by execute_job(). Do not interrupt unattended GUI
+                        # sessions with modal dialogs (including success dialogs).
+                        # Active tasks and the Journal tab show the outcome.
                         self.worker = None
-                        self.refresh_jobs(); self.refresh_journal()
-                        if kind == "done":
-                            messagebox.showinfo("Резервное копирование", data)
-                        else:
-                            messagebox.showerror("Резервное копирование", data)
+                        self.refresh_jobs()
+                        self.refresh_journal()
             except queue.Empty:
                 pass
             self.after(200, self.poll)

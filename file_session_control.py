@@ -184,9 +184,28 @@ def evict_targeted_clients(job, log=print):
         log(f"Файловая 1С: {host}: подходящих клиентских процессов: {len(matching)}")
         selected += matching
     if not selected:
-        raise RuntimeError("Не найден клиентский процесс, однозначно принадлежащий этой базе. "
-                           "Проверьте журнал диагностики IIS/SMB/Restart Manager. "
-                           "Общие IIS/Apache-процессы и чужие базы принудительно не завершаются")
+        # On a file infobase published through IIS, w3wp.exe itself may keep
+        # 1Cv8.1CD open. Never kill it: the same app pool can host other bases.
+        from file_lock_diagnostics import iis_publications_for_base
+        try:
+            publications = iis_publications_for_base(paths[0])
+        except (OSError, RuntimeError, ValueError):
+            publications = []
+        if publications:
+            description = "; ".join(
+                f"{p['app']} (пул {p['pool']}, "
+                f"{'общий' if p['shared'] else 'отдельный'})"
+                for p in publications)
+            raise RuntimeError(
+                f"Файловая база занята веб-публикацией IIS: {description}. "
+                "Невозможно безопасно завершить только сеанс этой базы через "
+                "общий процесс IIS. Дождитесь завершения веб-сеансов или "
+                "запланируйте согласованное окно обслуживания. "
+                "Общие пулы и другие базы не останавливались.")
+        raise RuntimeError(
+            "Не найден клиентский процесс, однозначно принадлежащий этой базе. "
+            "Проверьте журнал диагностики IIS/SMB/Restart Manager. "
+            "Общие IIS/Apache-процессы и чужие базы принудительно не завершаются")
     for process in selected:
         _powershell(process["host"], "terminate", process["pid"],
                     str(process["commandline"]), str(process["created"]))
