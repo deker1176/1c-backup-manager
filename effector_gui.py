@@ -406,13 +406,12 @@ class EffectorTaskEditor(tk.Toplevel):
                       "one_c_exe", "sql_server", "sql_database", "sql_backup_dir", "sql_driver", "sql_user",
                       "folder", "keep", "archive_format", "platform_mode", "ftp_profile", "cluster_user", "wait_seconds_override", "archive_prefix",
                       "procedure_name", "procedure_epf", "procedure_parameter", "procedure_timeout_hours", "check_time_hours", "check_time_minutes",
-                      "file_wait_seconds", "file_session_hosts", "file_base_aliases",
-                       "file_iis_pool_name", "file_iis_window_start", "file_iis_window_end"]:
+                      "file_wait_seconds", "file_session_hosts", "file_base_aliases"]:
             sv(field)
         for field in ["enabled", "ftp_enabled", "remove_raw_after_pack", "sql_windows_auth", "sql_trust_cert", "sql_remove_stage",
                       "stop_after_enabled", "commands_enabled", "check_reindex", "check_logical", "check_refs", "check_totals", "check_compress", "check_rebuild",
                       "repair_confirmed", "file_offline_confirmed", "procedure_exclusive", "file_force_confirmed",
-                       "file_iis_maintenance_enabled"]:
+                       "file_web_maintenance_enabled"]:
             bv(field)
         self.v["ib_password"] = tk.StringVar(value=self.owner.sec.get("db_passwords", {}).get(
             self.backend.job_key(self.job), self.owner.sec.get("db_passwords", {}).get(self.job.get("ref", ""), "")))
@@ -615,53 +614,39 @@ class EffectorTaskEditor(tk.Toplevel):
         mode = self.v["connection_kind"].get()
         if mode == "file":
             ttk.Label(page,
-                      text="Программа попытается освободить именно выбранную файловую базу "
-                           "перед резервным копированием. Способ отключения определяется автоматически "
-                           "по доступным данным Windows.",
-                      wraplength=560, justify="left").pack(anchor="w", pady=7)
-            ttk.Checkbutton(page,
-                            text="Автоматически завершать пользователей перед созданием копии",
-                            variable=self.v["file_auto_disconnect"]).pack(anchor="w", pady=10)
-            detail = ttk.Frame(page)
-            detail.pack(fill="x", pady=8)
-            add_line(detail, "Время ожидания выхода пользователей, сек.", self.v["file_wait_seconds"], 0)
-            section_bar(page, "IIS: ночное окно обслуживания")
+                      text="Способ подключения определяется автоматически: напрямую, "
+                           "SMB, IIS или Apache. Настройки отдельной конфигурации 1С "
+                           "и названия пулов не требуются.",
+                      wraplength=560, justify="left").pack(anchor="w", pady=(10, 18))
             ttk.Checkbutton(
-                page, variable=self.v["file_iis_maintenance_enabled"],
-                text="Разрешаю временно останавливать указанный пул IIS"
-            ).pack(anchor="w", pady=5)
+                page,
+                text="Автоматически завершать пользователей перед созданием копии",
+                variable=self.v["file_auto_disconnect"]
+            ).pack(anchor="w", pady=8)
+            ttk.Checkbutton(
+                page,
+                text="Разрешаю временно останавливать IIS и Apache при необходимости",
+                variable=self.v["file_web_maintenance_enabled"]
+            ).pack(anchor="w", pady=8)
             ttk.Label(
-                page, text="Остановка общего пула прерывает работу ВСЕХ сайтов в нём "
-                           "и может привести к потере несохранённых изменений. "
-                           "База копируется под эксклюзивной блокировкой. "
-                           "IIS запускается до создания .dt, с аварийным заданием Windows.",
+                page,
+                text="Программа найдёт нужную публикацию по файлу default.vrd, "
+                     "определит её пул IIS или службу Apache, создаст временную "
+                     "копию базы и восстановит веб-сервер ДО формирования .dt. "
+                     "Если веб-публикация не обнаружена, используются доступные "
+                     "механизмы отключения клиентских процессов 1С.",
+                wraplength=560, justify="left"
+            ).pack(anchor="w", pady=(14, 8))
+            ttk.Label(
+                page,
+                text="ВНИМАНИЕ: общий пул IIS или служба Apache может обслуживать "
+                     "несколько сайтов и баз 1С. Их работа будет прервана, "
+                     "а несохранённые изменения пользователей могут быть потеряны. "
+                     "Остановка выполняется только при подтверждённой публикации "
+                     "именно выбранной базы; аварийное восстановление регистрируется "
+                     "в Планировщике Windows.",
                 wraplength=560, justify="left", foreground="#9a482b"
-            ).pack(anchor="w", pady=4)
-            iis = ttk.Frame(page)
-            iis.pack(fill="x", pady=4)
-            add_line(iis, "Точное имя разрешённого пула IIS", self.v["file_iis_pool_name"], 0)
-            add_line(iis, "Начало разрешённого окна ЧЧ:ММ", self.v["file_iis_window_start"], 1)
-            add_line(iis, "Конец разрешённого окна ЧЧ:ММ", self.v["file_iis_window_end"], 2)
-            self.file_more = tk.BooleanVar(value=bool(
-                self.v["file_session_hosts"].get() or self.v["file_base_aliases"].get()))
-            extra = ttk.LabelFrame(page, text="Дополнительные сведения о подключениях (необязательно)", padding=8)
-            add_line(extra, "Компьютеры пользователей (через ;)", self.v["file_session_hosts"], 0)
-            add_line(extra, "Сетевые пути к базе (через ;)", self.v["file_base_aliases"], 1)
-            def toggle():
-                if self.file_more.get():
-                    extra.pack(fill="x", pady=4)
-                else:
-                    extra.pack_forget()
-            ttk.Checkbutton(page, text="Дополнительные параметры подключения",
-                            variable=self.file_more, command=toggle).pack(anchor="w", pady=4)
-            toggle()
-            ttk.Label(page,
-                      text="Внимание: принудительное завершение может привести к потере "
-                           "несохранённых данных. Файловая 1С не предоставляет RAS: "
-                           "если сеанс не удаётся однозначно определить или публикация "
-                           "обслуживается общим IIS/Apache, программа не будет останавливать "
-                           "чужие процессы и службы.",
-                      wraplength=560, justify="left", foreground="#9a482b").pack(anchor="w", pady=12)
+            ).pack(anchor="w", pady=12)
         else:
             ttk.Label(page, text="Клиент-серверная база: остановка сеансов через RAS.",
                       wraplength=540, justify="left").pack(anchor="w", pady=7)
@@ -1012,12 +997,11 @@ class EffectorTaskEditor(tk.Toplevel):
                     "one_c_exe", "sql_server", "sql_database", "sql_backup_dir", "sql_driver", "sql_user",
                     "folder", "archive_format", "platform_mode", "ftp_profile", "cluster_user", "wait_seconds_override", "archive_prefix",
                     "procedure_name", "procedure_epf", "procedure_parameter", "procedure_timeout_hours", "check_time_hours", "check_time_minutes",
-                    "file_wait_seconds", "file_session_hosts", "file_base_aliases",
-                       "file_iis_pool_name", "file_iis_window_start", "file_iis_window_end"]:
+                    "file_wait_seconds", "file_session_hosts", "file_base_aliases"]:
             job[key] = self.v[key].get().strip()
         for field in ["enabled", "ftp_enabled", "remove_raw_after_pack", "sql_windows_auth", "sql_trust_cert", "sql_remove_stage", "stop_after_enabled", "commands_enabled", "notify_email", "notify_telegram", "notify_max", "notify_on_success", "notify_on_failure", "check_reindex", "check_logical", "check_refs", "check_totals", "check_compress", "check_rebuild",
                       "repair_confirmed", "file_offline_confirmed", "procedure_exclusive", "file_force_confirmed",
-                       "file_iis_maintenance_enabled"]:
+                       "file_web_maintenance_enabled"]:
             job[field] = bool(self.v[field].get())
         job["keep"] = max(1, int(self.v["keep"].get() or 7))
         job["ftp_targets"] = sorted(self.selected_ftp_profiles)
@@ -1039,14 +1023,12 @@ class EffectorTaskEditor(tk.Toplevel):
             ) if automatically else "wait_only"
             from file_session_control import validate_file_disconnect_settings
             validate_file_disconnect_settings(job)
-            if job.get("file_iis_maintenance_enabled"):
-                from iis_maintenance import in_window, POOL_NAME
-                if not automatically:
-                    raise ValueError("Для обслуживания IIS включите автоматическое завершение пользователей")
-                if not POOL_NAME.fullmatch(job.get("file_iis_pool_name", "")):
-                    raise ValueError("Укажите точное имя разрешённого пула IIS (например DefaultAppPool)")
-                in_window(datetime(2026, 1, 1, 23, 30),
-                          job["file_iis_window_start"], job["file_iis_window_end"])
+            if job.get("file_web_maintenance_enabled") and not automatically:
+                raise ValueError("Для остановки IIS/Apache включите автоматическое "
+                                 "завершение пользователей")
+            # The pre-5.4 IIS-only permission must never trigger a legacy
+            # path after the user saves the new unified web consent.
+            job["file_iis_maintenance_enabled"] = False
         job["platform_mode"] = next((key for key, label in PLATFORM_DISPLAY.items() if label == source_value(self.platform_display.get())), "inherit")
         if self.job.get("type") in {"files", "extra_copy"}:
             job["file_paths"] = self.filebox.get("1.0", "end-1c").strip()
