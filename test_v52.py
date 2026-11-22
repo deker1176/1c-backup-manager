@@ -27,7 +27,7 @@ def test_vrd_parses_xml_escaped_connection_string():
 
 def test_discover_iis_shared_pool_without_modifying_it():
     def read(path):
-        if path.lower().endswith(r"\unf\default.vrd"):
+        if norm_path(path).endswith(r"\unf\default.vrd"):
             return VRD
         return r'<point ib="File=&quot;C:\Base\buh&quot;;"/>'
     matches = find_iis_publications(BASE, APPS, VDIRS, read)
@@ -41,7 +41,9 @@ def test_discover_iis_shared_pool_without_modifying_it():
 def test_discover_iis_dedicated_pool():
     apps = APPS.replace('APP "Default Web Site/unf" (applicationPool:DefaultAppPool)',
                         'APP "Default Web Site/unf" (applicationPool:OneC_UNF)')
-    pubs = find_iis_publications(BASE, apps, VDIRS, lambda _: VRD)
+    pubs = find_iis_publications(BASE, apps, VDIRS,
+        lambda p: VRD if norm_path(p).endswith(r"\unf\default.vrd") else
+        r'<point ib="File=&quot;C:\Base\buh&quot;;"/>')
     assert len(pubs) == 1
     assert not pubs[0]["shared"]
 
