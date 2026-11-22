@@ -240,9 +240,7 @@ def stage_with_web_pause(job, stage, log=print):
         raise RuntimeError("Не найдена подтверждённая веб-публикация этой базы в IIS/Apache")
     stage = Path(stage)
     stage.mkdir(parents=True, exist_ok=True)
-    if os.path.commonpath((os.path.normcase(str(source_dir.resolve())),
-                           os.path.normcase(str(stage.resolve())))) == \
-            os.path.normcase(str(source_dir.resolve())):
+    if stage.resolve().is_relative_to(source_dir.resolve()):
         raise RuntimeError("Временная копия не может располагаться внутри рабочей базы")
     import shutil
     if shutil.disk_usage(stage).free < source.stat().st_size + 16 * 1024 * 1024:
