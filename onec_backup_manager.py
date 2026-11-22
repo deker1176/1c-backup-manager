@@ -42,7 +42,7 @@ from backup_extensions import (
 )
 
 APP_NAME = "1C Backup Manager"
-APP_VERSION = "5.3"
+APP_VERSION = "5.4"
 CONTACT_TELEGRAM = "@dek76"
 CONFIG_NAME = "config.json"
 SECRETS_NAME = "secrets.dat"
@@ -321,6 +321,7 @@ def normalize_db(db: dict) -> dict:
     result.setdefault("file_session_hosts", "")
     result.setdefault("file_base_aliases", "")
     result.setdefault("file_force_confirmed", False)
+    result.setdefault("file_web_maintenance_enabled", False)
     result.setdefault("file_iis_maintenance_enabled", False)
     result.setdefault("file_iis_pool_name", "")
     result.setdefault("file_iis_window_start", "23:00")
@@ -1080,19 +1081,24 @@ def run_file_1c_backup(cfg: dict, sec: dict, job: dict, log=print) -> Path:
         raise RuntimeError(f"Файловая база осталась занята после {grace_seconds} сек. "
                            f"Включите отключение пользователей в настройках задания. {outlog}")
 
-    if job.get("file_iis_maintenance_enabled"):
-        # Stage only under an independent IIS recovery watchdog and exclusive
-        # source lock. The pool is restored BEFORE DumpIB starts.
+    if job.get("file_web_maintenance_enabled"):
+        # The checkbox grants permission to temporarily stop verified web
+        # hosts. No pool/service name or hours are required in the job.
+        # Nothing is stopped unless default.vrd matches this exact file base.
         import tempfile
-        from iis_maintenance import stage_with_iis_pause
-        with tempfile.TemporaryDirectory(prefix="1cbm_stage_", dir=str(folder)) as stage:
-            stage_with_iis_pause(job, Path(stage), log=log)
-            success, code, details = dump_attempt(3, actual_base=Path(stage))
-            if not success:
-                raise RuntimeError(f"DumpIB из временной копии завершился с кодом {code}: "
-                                   f"{details.strip()[-1200:]}. Журнал: {outlog}")
-        log(f"Файловая 1С: создан {dest.name}; IIS уже восстановлен")
-        return dest
+        from web_maintenance import web_targets_for_base, stage_with_web_pause
+        pools, services, _ = web_targets_for_base(str(base))
+        if pools or services:
+            with tempfile.TemporaryDirectory(prefix="1cbm_stage_", dir=str(folder)) as stage:
+                stage_with_web_pause(job, Path(stage), log=log)
+                success, code, details = dump_attempt(3, actual_base=Path(stage))
+                if not success:
+                    raise RuntimeError(f"DumpIB из временной копии завершился с кодом {code}: "
+                                       f"{details.strip()[-1200:]}. Журнал: {outlog}")
+            log(f"Файловая 1С: создан {dest.name}; IIS/Apache восстановлены")
+            return dest
+        log("Файловая 1С: подходящие публикации IIS/Apache не найдены; "
+            "проверяем локальные и известные удалённые процессы 1С")
 
     terminated = evict_targeted_clients(job, log=log)
     log(f"Завершено клиентских процессов 1С: {terminated}. Повтор DumpIB.")
