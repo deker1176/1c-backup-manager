@@ -42,7 +42,7 @@ from backup_extensions import (
 )
 
 APP_NAME = "1C Backup Manager"
-APP_VERSION = "4.8"
+APP_VERSION = "5.0"
 CONTACT_TELEGRAM = "@dek76"
 CONFIG_NAME = "config.json"
 SECRETS_NAME = "secrets.dat"
@@ -316,6 +316,11 @@ def normalize_db(db: dict) -> dict:
     result.setdefault("repair_bad_data", "none")
     result.setdefault("repair_confirmed", False)
     result.setdefault("file_offline_confirmed", False)
+    result.setdefault("file_disconnect_mode", "wait_only")
+    result.setdefault("file_wait_seconds", 60)
+    result.setdefault("file_session_hosts", "")
+    result.setdefault("file_base_aliases", "")
+    result.setdefault("file_force_confirmed", False)
     result.setdefault("check_time_hours", 0)
     result.setdefault("check_time_minutes", 0)
     result.setdefault("procedure_name", "Выполнение обмена")
@@ -972,8 +977,35 @@ class BackupEngine:
             self.close()
 
 
+def _file_1c_log(path):
+    """Decode 1C diagnostic log, which may use cp1251 on Windows."""
+    try:
+        payload = Path(path).read_bytes()
+    except OSError:
+        return ""
+    if payload.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return payload.decode("utf-16", errors="replace")
+    if payload.startswith(b"\xef\xbb\xbf"):
+        return payload.decode("utf-8-sig", errors="replace")
+    for codec in ("utf-8", "cp1251", "cp866"):
+        try:
+            return payload.decode(codec)
+        except UnicodeError:
+            continue
+    return payload.decode("utf-8", errors="replace")
+
+
+def _is_file_1c_exclusive_error(message):
+    t = str(message or "").casefold()
+    return any(word in t for word in (
+        "исключительной блокировки", "исключительная блокировка", "активны сеансы",
+        "exclusive lock", "exclusive access", "infobase is locked", "database is in use"))
+
+
 def run_file_1c_backup(cfg: dict, sec: dict, job: dict, log=print) -> Path:
-    """File-mode 1C .dt, without RAC. Active users must exit; 1C checks exclusive access."""
+    """File-based DumpIB, optionally evicting positively identified Windows clients."""
+    from file_session_control import validate_file_disconnect_settings, evict_targeted_clients
+    mode, grace_seconds, _ = validate_file_disconnect_settings(job)
     folder = make_target_folder(cfg, job)
     base = Path(str(job.get("one_c_file", "")).strip())
     if not base.is_dir():
@@ -999,11 +1031,46 @@ def run_file_1c_backup(cfg: dict, sec: dict, job: dict, log=print) -> Path:
             args.append(f"/P{pwd}")
     args += ["/DumpIB", str(dest), "/Out", str(outlog), "-NoTruncate",
              "/DisableStartupMessages", "/DisableStartupDialogs"]
-    log("Файловая база: DumpIB; если открыта в 1С, выгрузка завершится ошибкой без отключения пользователей")
-    result = subprocess.run(args, capture_output=True, text=True, encoding="utf-8",
-                            errors="replace", creationflags=CREATE_NO_WINDOW, timeout=limit_seconds(24 * 3600))
-    if result.returncode != 0 or not dest.exists() or dest.stat().st_size <= 0:
-        raise RuntimeError(f"Ошибка выгрузки файловой 1С (код {result.returncode}). См. {outlog}")
+    def dump_attempt(index):
+        log(f"Файловая 1С: запуск DumpIB (попытка {index}) для {base}")
+        result = subprocess.run(args, capture_output=True, text=True, encoding="utf-8",
+                                errors="replace", creationflags=CREATE_NO_WINDOW,
+                                timeout=limit_seconds(24 * 3600))
+        success = result.returncode == 0 and dest.exists() and dest.stat().st_size > 0
+        details = _file_1c_log(outlog) or (result.stdout or "") + "\n" + (result.stderr or "")
+        if not success and details.strip():
+            log("Сообщение 1С: " + details.strip()[-1500:])
+        return success, result.returncode, details
+
+    success, code, details = dump_attempt(1)
+    if success:
+        log(f"Файловая 1С: создан {dest.name}")
+        return dest
+    if not _is_file_1c_exclusive_error(details):
+        raise RuntimeError(f"Выгрузка файловой 1С завершилась с кодом {code}: "
+                           f"{details.strip()[-1200:]}. Журнал: {outlog}")
+
+    log(f"Файловая база занята. Ожидание завершения работы: {grace_seconds} сек.")
+    if grace_seconds:
+        time.sleep(grace_seconds)
+    success, code, details = dump_attempt(2)
+    if success:
+        log(f"Файловая 1С: создан {dest.name}")
+        return dest
+    if not _is_file_1c_exclusive_error(details):
+        raise RuntimeError(f"Выгрузка файловой 1С завершилась с кодом {code}: "
+                           f"{details.strip()[-1200:]}. Журнал: {outlog}")
+    if mode == "wait_only":
+        raise RuntimeError(f"Файловая база осталась занята после {grace_seconds} сек. "
+                           f"Включите отключение пользователей в настройках задания. {outlog}")
+
+    terminated = evict_targeted_clients(job, log=log)
+    log(f"Завершено клиентских процессов 1С: {terminated}. Повтор DumpIB.")
+    time.sleep(3)
+    success, code, details = dump_attempt(3)
+    if not success:
+        raise RuntimeError(f"Выгрузка после отключения сеансов не удалась (код {code}): "
+                           f"{details.strip()[-1200:]}. Журнал: {outlog}")
     log(f"Файловая 1С: создан {dest.name}")
     return dest
 

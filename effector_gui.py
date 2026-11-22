@@ -1,4 +1,4 @@
-"""Effector-style task manager UI for 1C Backup Manager v4.8."""
+"""Effector-style task manager UI for 1C Backup Manager v5.0."""
 from __future__ import annotations
 
 from copy import deepcopy
@@ -404,11 +404,12 @@ class EffectorTaskEditor(tk.Toplevel):
         for field in ["name", "ref", "ib_ref", "ib_user", "one_c_server", "one_c_file", "one_c_url", "one_c_ras",
                       "one_c_exe", "sql_server", "sql_database", "sql_backup_dir", "sql_driver", "sql_user",
                       "folder", "keep", "archive_format", "platform_mode", "ftp_profile", "cluster_user", "wait_seconds_override", "archive_prefix",
-                      "procedure_name", "procedure_epf", "procedure_parameter", "procedure_timeout_hours", "check_time_hours", "check_time_minutes"]:
+                      "procedure_name", "procedure_epf", "procedure_parameter", "procedure_timeout_hours", "check_time_hours", "check_time_minutes",
+                      "file_wait_seconds", "file_session_hosts", "file_base_aliases"]:
             sv(field)
         for field in ["enabled", "ftp_enabled", "remove_raw_after_pack", "sql_windows_auth", "sql_trust_cert", "sql_remove_stage",
                       "stop_after_enabled", "commands_enabled", "check_reindex", "check_logical", "check_refs", "check_totals", "check_compress", "check_rebuild",
-                      "repair_confirmed", "file_offline_confirmed", "procedure_exclusive"]:
+                      "repair_confirmed", "file_offline_confirmed", "procedure_exclusive", "file_force_confirmed"]:
             bv(field)
         self.v["ib_password"] = tk.StringVar(value=self.owner.sec.get("db_passwords", {}).get(
             self.backend.job_key(self.job), self.owner.sec.get("db_passwords", {}).get(self.job.get("ref", ""), "")))
@@ -424,6 +425,7 @@ class EffectorTaskEditor(tk.Toplevel):
         self.selected_ftp_profiles = set(selected_targets)
         self.legacy_ftp_selected = bool(self.job.get("ftp_enabled", False) and not selected_targets)
         self.v["connection_kind"] = tk.StringVar(value=self.job.get("connection_kind", "server"))
+        self.v["file_disconnect_mode"] = tk.StringVar(value=self.job.get("file_disconnect_mode", "wait_only"))
         self.v["command_before"] = tk.StringVar(value=str(self.job.get("command_before", "")))
         self.v["command_after"] = tk.StringVar(value=str(self.job.get("command_after", "")))
         self.v["command_body"] = tk.StringVar(value=str(self.job.get("command_body", "")))
@@ -615,6 +617,26 @@ class EffectorTaskEditor(tk.Toplevel):
         ttk.Label(frm, text="Принудительно завершать сеансы").grid(row=1, column=0, sticky="w", pady=6)
         ttk.Combobox(frm, textvariable=self.v["force_terminate_override"],
                      values=["По умолчанию", "Да", "Нет"], state="readonly").grid(row=1, column=1, sticky="w", pady=6)
+        # File-mode sessions cannot be managed via RAS. Target only exact /F matches.
+        fbox = ttk.LabelFrame(page, text="Файловая база — отключение клиентов Windows", padding=8)
+        fbox.pack(fill="x", pady=(5, 8))
+        ttk.Radiobutton(fbox, text="Только ожидать выхода пользователей (по умолчанию)",
+                        variable=self.v["file_disconnect_mode"], value="wait_only").pack(anchor="w")
+        ttk.Radiobutton(fbox, text="Принудительно завершать сеансы на этом ПК",
+                        variable=self.v["file_disconnect_mode"], value="force_local").pack(anchor="w")
+        ttk.Radiobutton(fbox, text="Принудительно локально и на указанных ПК (WinRM)",
+                        variable=self.v["file_disconnect_mode"], value="force_hosts").pack(anchor="w")
+        ff = ttk.Frame(fbox)
+        ff.pack(fill="x")
+        add_line(ff, "Ожидать после отказа DumpIB, сек.", self.v["file_wait_seconds"], 0)
+        add_line(ff, "Удалённые ПК (через ;)", self.v["file_session_hosts"], 1)
+        add_line(ff, "Сетевые пути к этой базе (через ;)", self.v["file_base_aliases"], 2)
+        ttk.Checkbutton(fbox, text="Подтверждаю: несохранённые данные пользователей могут быть потеряны",
+                        variable=self.v["file_force_confirmed"]).pack(anchor="w", pady=5)
+        ttk.Label(fbox, text="Завершаются только процессы 1С с точно совпадающим путём /F к этой базе. "
+                         "Другие базы, Конфигуратор и неопознанные сеансы не трогаются. "
+                         "Для удалённых ПК нужны включённый WinRM и права администратора.",
+                  foreground="#9a482b", wraplength=540).pack(anchor="w", pady=3)
         # This is required only on clusters configured with an administrator.
         # Keep credentials for existing tasks, but hide advanced RAS settings by default.
         self.cluster_auth_expanded = tk.BooleanVar(value=bool(
@@ -959,10 +981,11 @@ class EffectorTaskEditor(tk.Toplevel):
         for key in ["name", "ref", "ib_ref", "ib_user", "one_c_server", "one_c_file", "one_c_url", "one_c_ras",
                     "one_c_exe", "sql_server", "sql_database", "sql_backup_dir", "sql_driver", "sql_user",
                     "folder", "archive_format", "platform_mode", "ftp_profile", "cluster_user", "wait_seconds_override", "archive_prefix",
-                    "procedure_name", "procedure_epf", "procedure_parameter", "procedure_timeout_hours", "check_time_hours", "check_time_minutes"]:
+                    "procedure_name", "procedure_epf", "procedure_parameter", "procedure_timeout_hours", "check_time_hours", "check_time_minutes",
+                    "file_wait_seconds", "file_session_hosts", "file_base_aliases"]:
             job[key] = self.v[key].get().strip()
         for field in ["enabled", "ftp_enabled", "remove_raw_after_pack", "sql_windows_auth", "sql_trust_cert", "sql_remove_stage", "stop_after_enabled", "commands_enabled", "notify_email", "notify_telegram", "notify_max", "notify_on_success", "notify_on_failure", "check_reindex", "check_logical", "check_refs", "check_totals", "check_compress", "check_rebuild",
-                      "repair_confirmed", "file_offline_confirmed", "procedure_exclusive"]:
+                      "repair_confirmed", "file_offline_confirmed", "procedure_exclusive", "file_force_confirmed"]:
             job[field] = bool(self.v[field].get())
         job["keep"] = max(1, int(self.v["keep"].get() or 7))
         job["ftp_targets"] = sorted(self.selected_ftp_profiles)
@@ -975,6 +998,10 @@ class EffectorTaskEditor(tk.Toplevel):
         job["repair_bad_refs"] = self.v["repair_bad_refs"].get()
         job["repair_bad_data"] = self.v["repair_bad_data"].get()
         job["connection_kind"] = self.v["connection_kind"].get()
+        job["file_disconnect_mode"] = self.v["file_disconnect_mode"].get()
+        if job.get("type") == "1c" and job["connection_kind"] == "file":
+            from file_session_control import validate_file_disconnect_settings
+            validate_file_disconnect_settings(job)
         job["platform_mode"] = next((key for key, label in PLATFORM_DISPLAY.items() if label == source_value(self.platform_display.get())), "inherit")
         if self.job.get("type") in {"files", "extra_copy"}:
             job["file_paths"] = self.filebox.get("1.0", "end-1c").strip()
@@ -1310,7 +1337,7 @@ def create_app_class(backend):
         def __init__(self):
             super().__init__()
             self.backend = backend
-            self.title("1C Backup Manager v4.9 — резервное копирование")
+            self.title("1C Backup Manager v5.0 — резервное копирование")
             self.geometry("920x740")
             self.minsize(750, 590)
             self.style()
