@@ -23,7 +23,7 @@ def test_old_jobs_never_authorize_iis():
     job = normalize_db({"type": "1c", "name": "UNF"})
     assert job["file_iis_maintenance_enabled"] is False
     assert job["file_iis_pool_name"] == ""
-    assert APP_VERSION == "5.3"
+    assert tuple(map(int, APP_VERSION.split("."))) >= (5, 3, 0)
     with pytest.raises(RuntimeError, match="разрешение"):
         m.maintenance_plan(job)
 
