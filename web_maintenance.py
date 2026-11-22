@@ -138,6 +138,11 @@ def web_targets_for_base(base):
 
 class ApacheWatchdog(IISWatchdog):
     """Independent one-shot SYSTEM restore, scoped to a verified service."""
+    def __init__(self, service_name):
+        super().__init__(service_name)
+        self.name = "OneCBackupManager-RestoreApache-" + uuid.uuid4().hex
+        self.marker = self.marker.parent / (self.name + ".json")
+
     def arm(self):
         self.marker.parent.mkdir(parents=True, exist_ok=True)
         payload = {"name": self.pool, "marker": str(self.marker)}
