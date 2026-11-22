@@ -42,7 +42,7 @@ from backup_extensions import (
 )
 
 APP_NAME = "1C Backup Manager"
-APP_VERSION = "5.2.2"
+APP_VERSION = "5.3"
 CONTACT_TELEGRAM = "@dek76"
 CONFIG_NAME = "config.json"
 SECRETS_NAME = "secrets.dat"
@@ -321,6 +321,10 @@ def normalize_db(db: dict) -> dict:
     result.setdefault("file_session_hosts", "")
     result.setdefault("file_base_aliases", "")
     result.setdefault("file_force_confirmed", False)
+    result.setdefault("file_iis_maintenance_enabled", False)
+    result.setdefault("file_iis_pool_name", "")
+    result.setdefault("file_iis_window_start", "23:00")
+    result.setdefault("file_iis_window_end", "06:00")
     result.setdefault("check_time_hours", 0)
     result.setdefault("check_time_minutes", 0)
     result.setdefault("procedure_name", "Выполнение обмена")
@@ -1032,9 +1036,12 @@ def run_file_1c_backup(cfg: dict, sec: dict, job: dict, log=print) -> Path:
             args.append(f"/P{pwd}")
     args += ["/DumpIB", str(dest), "/Out", str(outlog), "-NoTruncate",
              "/DisableStartupMessages", "/DisableStartupDialogs"]
-    def dump_attempt(index):
-        log(f"Файловая 1С: запуск DumpIB (попытка {index}) для {base}")
-        result = subprocess.run(args, capture_output=True, text=True, encoding="utf-8",
+    def dump_attempt(index, actual_base=None):
+        source = actual_base or base
+        log(f"Файловая 1С: запуск DumpIB (попытка {index}) для {source}")
+        actual_args = list(args)
+        actual_args[2] = f"/F{source}"
+        result = subprocess.run(actual_args, capture_output=True, text=True, encoding="utf-8",
                                 errors="replace", creationflags=CREATE_NO_WINDOW,
                                 timeout=limit_seconds(24 * 3600))
         success = result.returncode == 0 and dest.exists() and dest.stat().st_size > 0
@@ -1072,6 +1079,20 @@ def run_file_1c_backup(cfg: dict, sec: dict, job: dict, log=print) -> Path:
     if mode == "wait_only":
         raise RuntimeError(f"Файловая база осталась занята после {grace_seconds} сек. "
                            f"Включите отключение пользователей в настройках задания. {outlog}")
+
+    if job.get("file_iis_maintenance_enabled"):
+        # Stage only under an independent IIS recovery watchdog and exclusive
+        # source lock. The pool is restored BEFORE DumpIB starts.
+        import tempfile
+        from iis_maintenance import stage_with_iis_pause
+        with tempfile.TemporaryDirectory(prefix="1cbm_stage_", dir=str(folder)) as stage:
+            stage_with_iis_pause(job, Path(stage), log=log)
+            success, code, details = dump_attempt(3, actual_base=Path(stage))
+            if not success:
+                raise RuntimeError(f"DumpIB из временной копии завершился с кодом {code}: "
+                                   f"{details.strip()[-1200:]}. Журнал: {outlog}")
+        log(f"Файловая 1С: создан {dest.name}; IIS уже восстановлен")
+        return dest
 
     terminated = evict_targeted_clients(job, log=log)
     log(f"Завершено клиентских процессов 1С: {terminated}. Повтор DumpIB.")
