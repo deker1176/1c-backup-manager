@@ -51,8 +51,7 @@ def test_iis_restored_after_copy_failure():
     guard = MagicMock()
     with patch.object(m, "pool_state", return_value="Started"), \
          patch.object(m, "IISWatchdog", return_value=guard), \
-         patch.object(m, "_appcmd") as cmd, \
-         patch.object(m, "wait_state"), \
+         patch.object(m, "stop_pool") as stop, \
          patch.object(m, "start_pool") as resume:
         with pytest.raises(OSError):
             with m.pause_pool("DefaultAppPool", log=lambda _: None):
@@ -60,7 +59,8 @@ def test_iis_restored_after_copy_failure():
     guard.arm.assert_called_once()
     resume.assert_called_once_with("DefaultAppPool")
     guard.disarm.assert_called_once()
-    cmd.assert_called_once_with("stop", "apppool", "DefaultAppPool")
+    assert stop.call_count == 1
+    assert stop.call_args.args == ("DefaultAppPool",)
 
 
 def test_watchdog_arm_failure_must_not_stop_pool():
@@ -68,18 +68,18 @@ def test_watchdog_arm_failure_must_not_stop_pool():
     guard.arm.side_effect = RuntimeError("No Task Scheduler rights")
     with patch.object(m, "pool_state", return_value="Started"), \
          patch.object(m, "IISWatchdog", return_value=guard), \
-         patch.object(m, "_appcmd") as cmd:
+         patch.object(m, "stop_pool") as stop:
         with pytest.raises(RuntimeError):
             with m.pause_pool("DefaultAppPool"):
                 pass
-    cmd.assert_not_called()
+    stop.assert_not_called()
 
 
 def test_watchdog_remains_if_iis_restore_fails():
     guard = MagicMock()
     with patch.object(m, "pool_state", return_value="Started"), \
          patch.object(m, "IISWatchdog", return_value=guard), \
-         patch.object(m, "_appcmd"), patch.object(m, "wait_state"), \
+         patch.object(m, "stop_pool"), \
          patch.object(m, "start_pool", side_effect=RuntimeError("IIS unavailable")):
         with pytest.raises(RuntimeError, match="IIS unavailable"):
             with m.pause_pool("DefaultAppPool", log=lambda _: None):

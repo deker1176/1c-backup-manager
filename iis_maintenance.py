@@ -99,11 +99,41 @@ def pool_state(pool):
 
 def wait_state(pool, wanted, seconds=90):
     deadline = time.monotonic() + seconds
+    last = "unknown"
     while time.monotonic() < deadline:
-        if pool_state(pool) == wanted:
+        last = pool_state(pool)
+        if last == wanted:
             return
         time.sleep(1)
-    raise RuntimeError(f"Пул IIS {pool} не перешёл в состояние {wanted}")
+    last = pool_state(pool)
+    if last != wanted:
+        raise RuntimeError(
+            f"Пул IIS {pool} не перешёл в состояние {wanted} за {seconds} секунд; "
+            f"текущее состояние: {last}")
+
+
+def stop_pool(pool, log=print):
+    """IIS shutdownTimeLimit defaults to 90s; never give up after 45s.
+
+    Even if appcmd times out, WAS may have accepted the stop. Confirm its
+    actual state before proceeding to exclusive 1C database snapshot.
+    """
+    seconds = 180
+    began = time.monotonic()
+    try:
+        _appcmd("stop", "apppool", pool, timeout=seconds)
+    except subprocess.TimeoutExpired as exc:
+        log(f"IIS: appcmd stop {pool} выполняется более {seconds} сек.; "
+            "проверяем фактическое состояние пула")
+        try:
+            wait_state(pool, "Stopped", seconds=30)
+        except Exception as state_exc:
+            raise RuntimeError(
+                f"IIS: пул {pool} не остановлен за {seconds}+30 сек.; "
+                f"копирование отменено: {state_exc}") from exc
+    wait_state(pool, "Stopped", seconds=90)
+    log(f"IIS: пул {pool} подтверждён как Stopped; "
+        f"прошло {int(time.monotonic() - began)} сек.")
 
 
 def start_pool(pool):
@@ -111,10 +141,18 @@ def start_pool(pool):
     if state == "Started":
         return
     if state == "Stopping":
-        wait_state(pool, "Stopped")
+        wait_state(pool, "Stopped", seconds=120)
     if pool_state(pool) == "Stopped":
-        _appcmd("start", "apppool", pool)
-    wait_state(pool, "Started")
+        try:
+            _appcmd("start", "apppool", pool, timeout=150)
+        except subprocess.TimeoutExpired as exc:
+            # AppCmd may time out even after WAS accepts the start request.
+            try:
+                wait_state(pool, "Started", seconds=30)
+            except Exception as state_exc:
+                raise RuntimeError(
+                    f"IIS: пул {pool} не удалось запустить: {state_exc}") from exc
+    wait_state(pool, "Started", seconds=90)
 
 
 class IISWatchdog:
@@ -180,15 +218,18 @@ def pause_pool(pool, log=print):
     try:
         attempted = True
         log(f"IIS: временная остановка {pool}; аварийный запуск зарегистрирован в Планировщике")
-        _appcmd("stop", "apppool", pool)
-        wait_state(pool, "Stopped")
+        stop_pool(pool, log=log)
         yield
     finally:
         if attempted:
             try:
+                prior = pool_state(pool)
                 start_pool(pool)
                 restored = True
-                log(f"IIS: пул {pool} запущен повторно")
+                if prior == "Started":
+                    log(f"IIS: пул {pool} уже работает; повторный запуск не требовался")
+                else:
+                    log(f"IIS: пул {pool} восстановлен (Started)")
             except Exception as exc:
                 log(f"КРИТИЧЕСКИ: IIS {pool} не восстановлен: {exc}. "
                     "Аварийная задача в Планировщике сохранена")

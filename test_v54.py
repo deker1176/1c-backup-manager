@@ -117,7 +117,7 @@ def test_legacy_settings_do_not_grant_new_permission():
                            "file_iis_maintenance_enabled": True,
                            "file_iis_pool_name": "DefaultAppPool"})
     assert legacy["file_web_maintenance_enabled"] is False
-    assert APP_VERSION == "5.4"
+    assert tuple(map(int, APP_VERSION.split("."))) >= (5, 4, 0)
 
 
 def test_gui_hides_pool_name_and_time_fields():
