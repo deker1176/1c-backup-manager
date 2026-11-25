@@ -177,7 +177,8 @@ def test_mssql_query_uses_backup_and_verifyonly(tmp_path, monkeypatch):
 
 
 def test_lock_prevents_parallel_start(tmp_path):
+    # v5.5 queues conflicting work by default; a zero wait must still fail closed.
     with ext.global_backup_lock(tmp_path):
-        with pytest.raises(RuntimeError,match='уже выполняется'):
-            with ext.global_backup_lock(tmp_path):
+        with pytest.raises(RuntimeError, match='время ожидания'):
+            with ext.global_backup_lock(tmp_path, wait_seconds=0):
                 pass
