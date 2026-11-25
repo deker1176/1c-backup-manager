@@ -1379,6 +1379,10 @@ def create_app_class(backend):
                 self.sec = {"cluster_password": "", "db_passwords": {}, "sql_passwords": {}, "ftp_password": "", "ftp_profile_passwords": {}, "cluster_job_passwords": {}}
             self.jobs = [backend.normalize_db(j) for j in self.cfg.get("databases", [])]
             self.worker = None
+            self.pending_works = []
+            self.active_work_label = ""
+            self.pending_job_keys = []
+            self.active_job_key = None
             self.q = queue.Queue()
             self.summary = tk.StringVar()
             self.service_status = tk.StringVar(value="Служба: Проверка...")
@@ -1510,11 +1514,22 @@ def create_app_class(backend):
             self.journal.pack(fill="both", expand=True)
             self.journal.bind("<Double-1>", self.open_journal_details)
             self.journal_records = {}
-            self.archives = ttk.Treeview(backups_page, columns=("name", "size", "modified"), show="headings")
-            for col, title, width in [("name", "Файл", 600), ("size", "Размер, МБ", 110), ("modified", "Дата", 180)]:
+            self.archives = ttk.Treeview(backups_page, columns=("path", "size", "modified"), show="headings")
+            for col, title, width in [("path", "Полный путь архива", 720),
+                                       ("size", "Размер, МБ", 110),
+                                       ("modified", "Дата", 170)]:
                 self.archives.heading(col, text=title)
-                self.archives.column(col, width=width, stretch=col == "name")
+                self.archives.column(col, width=width, stretch=col == "path")
             self.archives.pack(fill="both", expand=True)
+            self.archive_paths = {}
+            self._last_archive_refresh = 0.0
+            self.archives.bind("<Double-1>", lambda event: self.open_archive_folder())
+            archive_buttons = ttk.Frame(backups_page)
+            archive_buttons.pack(fill="x", pady=4)
+            ttk.Button(archive_buttons, text="Обновить", command=lambda: self.refresh_archives(True)).pack(side="left", padx=2)
+            ttk.Button(archive_buttons, text="Открыть папку", command=self.open_archive_folder).pack(side="left", padx=2)
+            ttk.Button(archive_buttons, text="Проверить SHA256", command=self.verify_selected_archive).pack(side="left", padx=2)
+            ttk.Button(archive_buttons, text="Восстановить в тестовую базу", command=self.restore_selected_archive).pack(side="left", padx=8)
             self.rawlog = tk.Text(raw_page, font=("Consolas", 9), state="disabled")
             self.rawlog.pack(fill="both", expand=True)
 
@@ -1679,14 +1694,120 @@ def create_app_class(backend):
                 menu.add_command(label="Выполнить", command=self.run_selected)
             menu.tk_popup(event.x_root, event.y_root)
 
-        def refresh_archives(self):
-            self.archives.delete(*self.archives.get_children())
-            root = Path(self.cfg.get("backup_root", ""))
-            if not root.exists():
+        def refresh_archives(self, force=False):
+            import time
+            if not force and time.monotonic() - self._last_archive_refresh < 30:
                 return
-            files = sorted((x for x in root.glob("**/*") if x.is_file() and x.suffix.lower() in {".dt", ".bak", ".zip", ".7z"}), key=lambda p: p.stat().st_mtime, reverse=True)[:200]
-            for p in files:
-                self.archives.insert("", "end", values=(str(p.relative_to(root)), f"{p.stat().st_size/1048576:.2f}", datetime.fromtimestamp(p.stat().st_mtime).strftime("%d.%m.%Y %H:%M:%S")))
+            self._last_archive_refresh = time.monotonic()
+            from backup_browser import find_backup_artifacts
+            current = self.archives.selection()
+            old_path = self.archive_paths.get(current[0]) if current else None
+            self.archives.delete(*self.archives.get_children())
+            self.archive_paths = {}
+            history = list_task_runs(limit=500)
+            artifacts = [x.get("artifact", "") for x in history if x.get("artifact")]
+            try:
+                results = find_backup_artifacts(self.cfg, self.jobs, artifacts)
+            except Exception as exc:
+                self._log(f"Ошибка обновления списка бэкапов: {exc}")
+                results = []
+            for index, info in enumerate(results):
+                path = info["path"]
+                iid = f"archive_{index}"
+                self.archive_paths[iid] = path
+                self.archives.insert("", "end", iid=iid,
+                                     values=(path, f'{info["size"]/1048576:.2f}',
+                                             datetime.fromtimestamp(info["modified"]).strftime("%d.%m.%Y %H:%M:%S")))
+                if old_path and os.path.normcase(path) == os.path.normcase(old_path):
+                    self.archives.selection_set(iid)
+
+        def selected_archive(self):
+            current = self.archives.selection()
+            return Path(self.archive_paths[current[0]]) if current and current[0] in self.archive_paths else None
+
+        def open_archive_folder(self):
+            archive = self.selected_archive()
+            if archive is None:
+                messagebox.showinfo("Бэкапы", "Выберите архив в списке", parent=self)
+                return
+            if not archive.is_file():
+                messagebox.showerror("Бэкапы", f"Файл недоступен: {archive}", parent=self)
+                return
+            if os.name == "nt":
+                os.startfile(str(archive.parent))
+            else:
+                self._log(f"Каталог архива: {archive.parent}")
+
+        def verify_selected_archive(self):
+            archive = self.selected_archive()
+            if archive is None:
+                messagebox.showinfo("Бэкапы", "Выберите .dt архив", parent=self)
+                return
+            if archive.suffix.lower() != ".dt":
+                messagebox.showinfo("Бэкапы", "Контроль SHA256 через эту кнопку предназначен для .dt", parent=self)
+                return
+            from backup_browser import verify_dt_checksum
+            def work():
+                sha = verify_dt_checksum(archive)
+                self._log(f"SHA256 совпадает: {archive} ({sha})")
+                return str(archive)
+            self.start_worker(work, label=f"SHA256: {archive.name}")
+
+        def restore_selected_archive(self):
+            """Never restore over production. Ask for a NEW empty test directory."""
+            archive = self.selected_archive()
+            if archive is None:
+                messagebox.showinfo("Восстановление", "Выберите архив .dt", parent=self)
+                return
+            if archive.suffix.casefold() != ".dt":
+                messagebox.showwarning("Восстановление", "Встроенное восстановление поддерживает только .dt. "
+                                       "Для .bak используйте SQL Server; ZIP/7z сначала распакуйте.", parent=self)
+                return
+            suggestion = archive.parent / "restore_tests" / (archive.stem + "_restore_test")
+            target_text = simpledialog.askstring(
+                "Тестовое восстановление 1С",
+                "Укажи новый ПУСТОЙ каталог для отдельной тестовой файловой базы.\n"
+                "Рабочую базу выбирать запрещено.",
+                initialvalue=str(suggestion), parent=self)
+            if not target_text:
+                return
+            target = Path(target_text.strip())
+            from backup_browser import validate_new_restore_target, restore_dt_as_test_infobase
+            try:
+                validate_new_restore_target(archive, target, self.jobs)
+            except Exception as exc:
+                messagebox.showerror("Восстановление", str(exc), parent=self)
+                return
+            if not messagebox.askyesno(
+                "Создание тестовой базы 1С",
+                f"Архив:\n{archive}\n\nНовая тестовая база:\n{target}\n\n"
+                "Будет создана НОВАЯ база, а существующие базы не изменятся.\n"
+                "Продолжить?", parent=self):
+                return
+            jobs = deepcopy(self.jobs)
+            platform = str(self.cfg.get("platform_bin") or "").strip()
+            def work():
+                from backup_extensions import global_backup_lock
+                from run_journal import begin_task_run
+                entry = begin_task_run({"id": "test_restore", "name": f"ТЕСТ ВОССТАНОВЛЕНИЯ {archive.name}",
+                                        "type": "restore"})
+                def restore_log(line):
+                    entry.log(line)
+                    self._log(line)
+                try:
+                    if not platform:
+                        platform_exe = self.backend.autodetect_platform_bin()
+                    else:
+                        platform_exe = platform
+                    with global_backup_lock(Path(self.cfg["backup_root"])):
+                        result = restore_dt_as_test_infobase(archive, target, jobs, platform_exe, restore_log)
+                    entry.finish(True, "Тестовая база создана", result)
+                    return f"Тестовая база 1С: {result}"
+                except Exception as exc:
+                    entry.log("ОШИБКА: " + str(exc))
+                    entry.finish(False, str(exc))
+                    raise
+            self.start_worker(work, label=f"Тестовое восстановление: {archive.name}")
 
         def refresh_journal(self):
             current = self.journal.selection()[0] if self.journal.selection() else None
@@ -1839,8 +1960,12 @@ def create_app_class(backend):
                         # sessions with modal dialogs (including success dialogs).
                         # Active tasks and the Journal tab show the outcome.
                         self.worker = None
+                        self.active_job_key = None
+                        self.active_work_label = ""
                         self.refresh_jobs()
                         self.refresh_journal()
+                        self.refresh_archives(True)
+                        self._start_next_worker()
             except queue.Empty:
                 pass
             self.after(200, self.poll)
@@ -1970,14 +2095,29 @@ def create_app_class(backend):
         def open_settings(self):
             SystemSettingsDialog(self)
 
-        def start_worker(self, work):
+        def start_worker(self, work, label="Операция", job_key=None):
+            """Queue manual operations instead of rejecting overlapping clicks."""
+            self.pending_works.append((work, label, job_key))
+            if job_key:
+                self.pending_job_keys.append(job_key)
+            self._log(f"Добавлено в очередь: {label}. Ожидают: {len(self.pending_works)}")
+            self._start_next_worker()
+
+        def _start_next_worker(self):
             if self.worker and self.worker.is_alive():
-                messagebox.showwarning("Задания", "Уже выполняется операция резервного копирования.")
                 return
+            if not self.pending_works:
+                return
+            work, label, job_key = self.pending_works.pop(0)
+            if job_key and job_key in self.pending_job_keys:
+                self.pending_job_keys.remove(job_key)
+            self.active_job_key = job_key
+            self.active_work_label = label
+            self._log(f"Очередь: начинаем {label}; осталось {len(self.pending_works)}")
             def runner():
                 try:
                     msg = work()
-                    self.q.put(("done", msg or "Операция завершена"))
+                    self.q.put(("done", msg or f"Выполнено: {label}"))
                 except Exception as exc:
                     self._log(traceback.format_exc())
                     self.q.put(("error", self.backend.friendly_error_message(exc, str(exc))))
@@ -1996,22 +2136,17 @@ def create_app_class(backend):
             def work():
                 result = self._backup_job(job)
                 return f"Выполнено: {job['name']}" + (f"\n{result}" if result else "")
-            self.start_worker(work)
+            self.start_worker(work, label=f"Бэкап: {job['name']}", job_key=self.backend.job_key(job))
 
         def run_all(self):
             jobs = [deepcopy(x) for x in self.jobs if x.get("enabled")]
             if not jobs:
                 messagebox.showinfo("Задания", "Нет включённых заданий.")
                 return
-            def worker():
-                fails = []
-                for job in jobs:
-                    try: self._backup_job(job)
-                    except Exception as exc: fails.append(f"{job.get('name')}: {exc}")
-                if fails:
-                    raise RuntimeError("Не все задания выполнены:\n" + "\n".join(fails))
-                return f"Задания выполнены: {len(jobs)}"
-            self.start_worker(worker)
+            for job in jobs:
+                self.start_worker(lambda job=job: self._backup_job(job),
+                                  label=f"Бэкап: {job['name']}",
+                                  job_key=self.backend.job_key(job))
 
         def retry_ftp(self):
             idx = self._index()
@@ -2196,7 +2331,7 @@ def create_app_class(backend):
                 self.exit_app()
 
         def exit_app(self):
-            if self.worker and self.worker.is_alive():
+            if (self.worker and self.worker.is_alive()) or self.pending_works:
                 messagebox.showwarning("Выполняется резервное копирование",
                     "Сейчас выполняется задача. Дождитесь завершения или сверните окно в трей.\n"
                     "Закрывать GUI во время DumpIB небезопасно.", parent=self)
