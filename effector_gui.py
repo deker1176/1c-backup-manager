@@ -1873,6 +1873,12 @@ def create_app_class(backend):
                     "running": "Выполняется", "ok": "Успешно", "error": "Ошибка",
                     "interrupted": "Прервано",
                 }.get(status, "Ожидание")
+                key = self.backend.job_key(job)
+                if key == self.active_job_key:
+                    status_label = "Выполняется"
+                elif key in self.pending_job_keys:
+                    position = self.pending_job_keys.index(key) + 1
+                    status_label = f"В очереди ({position})"
                 self.active_tree.insert("", "end", iid=f"active_{idx}",
                                         values=(job.get("name") or job.get("ref"),
                                                 next_label, previous, status_label))
@@ -2123,6 +2129,7 @@ def create_app_class(backend):
                     self.q.put(("error", self.backend.friendly_error_message(exc, str(exc))))
             self.worker = threading.Thread(target=runner, daemon=True)
             self.worker.start()
+            self.refresh_active_tasks()
 
         def _backup_job(self, job):
             self._log(f"Выполнение задания: {job['name']}")
