@@ -1,4 +1,4 @@
-# 1C Backup Manager v5.4.1
+# 1C Backup Manager v5.5.0
 
 Windows backup manager for **1C:Enterprise 8.x**, **Microsoft SQL Server**, and **files/directories**.
 
@@ -8,13 +8,21 @@ Windows backup manager for **1C:Enterprise 8.x**, **Microsoft SQL Server**, and 
 
 ## v5.4.1: verified IIS backup run (restore still pending)
 
-[Latest release v5.4.1](https://github.com/deker1176/1c-backup-manager/releases/tag/v5.4.1) · [Download Windows EXE](https://github.com/deker1176/1c-backup-manager/releases/download/v5.4.1/1CBackupManager.exe)
+[Latest release v5.5.0](https://github.com/deker1176/1c-backup-manager/releases/tag/v5.4.1) · [Download Windows EXE](https://github.com/deker1176/1c-backup-manager/releases/download/v5.4.1/1CBackupManager.exe)
 
 On November 23, 2026, a real Windows file-based 1C infobase (C:\Base\unf) was backed up through an IIS publication sharing DefaultAppPool. The manager detected the publication, registered emergency restoration, confirmed the pool was Stopped in 45 seconds, copied the infobase while holding an exclusive file handle, restarted IIS **before** DumpIB, and produced a .dt with SHA-256 and journal (result: ok). The user confirmed the web service was working again afterward.
 
 **Not yet verified:** restoration of this .dt into a separate empty 1C infobase. File size, SHA-256, and a successful DumpIB do not substitute for a restore test. Read the detailed [Russian field-test report and isolated restore checklist](README_RU.md#проверка-реального-резервного-копирования--23112026-v541). This run does not validate Apache, SMB, RAS, or other deployments.
 
 Shared IIS pool or Apache service shutdown must be enabled explicitly, and temporarily interrupts all hosted sites. Unsaved client operations can be lost.
+
+## v5.5.0: queue, archive catalog, isolated restore
+
+[Windows x64 release v5.5.0](https://github.com/deker1176/1c-backup-manager/releases/tag/v5.5.0) · [Download EXE](https://github.com/deker1176/1c-backup-manager/releases/download/v5.5.0/1CBackupManager.exe)
+
+Manual backup requests now queue in the GUI, while the Windows service executes same-time scheduled jobs serially and waits for the cross-process lock when necessary. The **Backups** tab scans each job's actual destination (including accessible UNC shares), shows full paths, and allows SHA-256 verification. For .dt it can create a **new empty test file infobase** using the documented 1C CREATEINFOBASE /UseTemplate syntax; production infobases are never chosen as restore targets. For detailed setup and limits see [README_RU.md](README_RU.md).
+
+**Note:** daily schedules require the Windows service to be running. Backup/restore jobs are serialized, not truly parallel. Test a restored infobase before relying on backups.
 
 ## Features
 
