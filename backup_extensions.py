@@ -430,9 +430,12 @@ def backup_files(job: dict, cfg: dict, sec: dict, log=print) -> Path:
 
 
 @contextmanager
-def global_backup_lock(base_dir: Path):
-    """Cross-process lock preventing GUI and Windows service from backing up simultaneously.
-    The file remains but the OS byte lock is automatically released after crashes.
+def global_backup_lock(base_dir: Path, wait_seconds=43200, poll_seconds=1):
+    """Wait for the shared GUI/service lock instead of failing when jobs overlap.
+
+    Only one backup/restore task can run at a time across processes. After a
+    crash the OS releases its byte lock; lock files are intentionally retained.
+    A bounded wait avoids indefinitely blocked services.
     """
     lock_path = Path(base_dir) / "backup.lock"
     try:
@@ -441,37 +444,53 @@ def global_backup_lock(base_dir: Path):
     except OSError as exc:
         raise RuntimeError(
             f"Корневая папка копий «{base_dir}» недоступна. "
-            "Откройте «Сервис → Параметры программы → Файлы архивов», "
-            "выберите существующий диск и проверьте права учётной записи службы."
+            "Проверьте Сервис → Параметры программы → Файлы архивов, "
+            "диск и права пользователя службы."
         ) from exc
     with lock_file as lock:
-        lock.seek(0)
-        if lock.read(1) != b"X":
-            lock.seek(0)
+        # Keep a byte available for Windows msvcrt byte-range locking.
+        lock.seek(0, os.SEEK_END)
+        if lock.tell() == 0:
             lock.write(b"X")
             lock.flush()
         lock.seek(0)
+        started = time.monotonic()
+        acquired = False
         if sys.platform == "win32":
             import msvcrt
-            try:
+
+            def acquire():
+                lock.seek(0)
                 msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
-            except OSError as exc:
-                raise RuntimeError("Другая копия программы или служба уже выполняет резервное копирование") from exc
-            try:
-                yield
-            finally:
+
+            def release():
                 lock.seek(0)
                 msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
         else:
             import fcntl
-            try:
+
+            def acquire():
                 fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except OSError as exc:
-                raise RuntimeError("Другое резервное копирование уже выполняется") from exc
-            try:
-                yield
-            finally:
+
+            def release():
                 fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+        try:
+            while not acquired:
+                try:
+                    acquire()
+                    acquired = True
+                except (OSError, BlockingIOError) as exc:
+                    if time.monotonic() - started >= wait_seconds:
+                        raise RuntimeError(
+                            "Истекло время ожидания очереди резервного копирования "
+                            f"({int(wait_seconds)} сек.). Предыдущее задание всё ещё работает"
+                        ) from exc
+                    time.sleep(max(0.05, poll_seconds))
+            yield
+        finally:
+            if acquired:
+                release()
 
 
 def sql_check_connection(job: dict, sec: dict) -> None:
