@@ -20,8 +20,8 @@ ARCHIVE_EXTENSIONS = {".dt", ".bak", ".zip", ".7z"}
 def backup_locations(cfg, jobs, run_artifacts=()):
     root = Path(str(cfg.get("backup_root") or "")).expanduser()
     result = []
-    if str(cfg.get("backup_root") or "").strip():
-        result.append((root, 2))
+    # Scan explicit job output folders first, so an unrelated tree under
+    # backup_root cannot exhaust the bounded traversal before UNC archives.
     for job in jobs:
         path = str(job.get("folder") or "").strip()
         if path:
@@ -34,6 +34,8 @@ def backup_locations(cfg, jobs, run_artifacts=()):
         path = Path(str(item or "")).expanduser()
         if str(item or "").strip():
             result.append((path.parent, 1))
+    if str(cfg.get("backup_root") or "").strip():
+        result.append((root, 2))
     dedup = {}
     for folder, depth in result:
         key = os.path.normcase(os.path.normpath(str(folder)))
